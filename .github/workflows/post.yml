@@ -1,0 +1,35 @@
+name: threads-auto-post
+
+on:
+  schedule:
+    # 10分おきに実行 (UTC基準。投稿時刻の判定はスプレッドシート側のJSTで行う)
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}   # 手動実行ボタンも有効化
+
+concurrency:
+  group: threads-auto-post
+  cancel-in-progress: false   # 多重起動で二重投稿しないよう直列化
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run publisher
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          TZ_NAME: Asia/Tokyo
+          # 1アカ1日上限はリポジトリ Variable で一元管理（Settings → Secrets and variables
+          # → Actions → Variables に MAX_POSTS_PER_DAY を作成）。未設定なら 50。
+          MAX_POSTS_PER_DAY: ${{ vars.MAX_POSTS_PER_DAY || '50' }}
+        run: python main.py

@@ -1,0 +1,6 @@
+row_id,account,post_datetime,text,media_type,media_url,reply_to,reply_control,status,posted_id,posted_at,error
+EX1,seizo_kyujin,2026-06-15 12:00,"【未経験OKの製造スタッフ募集】土日休み・寮あり。詳細はこのツリーで↓",TEXT,,,everyone,sample,,,
+EX2,seizo_kyujin,2026-06-15 12:01,"仕事内容：部品の組立と検査。冷暖房完備の工場で座り作業も多めです。",TEXT,,EX1,,sample,,,
+EX3,seizo_kyujin,2026-06-15 12:02,"応募はプロフィールのリンクから。気になる方はまず保存しておいてください。",TEXT,,EX2,,sample,,,
+EX4,seizo_kyujin,2026-06-15 18:00,"単発投稿の例：本日の現場の様子を写真つきで紹介",IMAGE,https://example.com/your-image.jpg,,everyone,sample,,,
+EX5,seizo_kyujin,2026-06-15 19:30,"カルーセル例：media_type=CAROUSEL、media_urlに公開URLをカンマ区切りで2件以上","CAROUSEL","https://example.com/1.jpg,https://example.com/2.jpg",,everyone,sample,,,

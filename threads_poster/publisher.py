@@ -1,0 +1,215 @@
+"""
+オーケストレーション本体。
+GitHub Actions などから定期実行され、毎回:
+  1. アカウントごとにトークンを必要に応じてリフレッシュ
+  2. 公開時刻が到来した未投稿の行を抽出
+  3. ツリー(親→子)の依存を解決しつつ順次公開
+  4. 250/24h のレート制限を遵守
+  5. 結果(status / posted_id)をスプレッドシートに書き戻す
+"""
+from __future__ import annotations
+
+import logging
+import re
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
+
+from .threads_api import ThreadsClient, ThreadsAPIError
+from .sheets import Store
+
+logger = logging.getLogger("publisher")
+
+# トークンは「24h以上経過」してから更新可能。安全側で日数経過後に更新。
+REFRESH_AFTER_DAYS = 7
+# 安全上限。Threads公式は250/24h/ユーザーだが、スパム判定回避のため低めの既定を推奨。
+DEFAULT_MAX_POSTS_PER_DAY = 50
+
+
+def _parse_dt(value, tz: ZoneInfo) -> datetime | None:
+    if value in (None, ""):
+        return None
+    s = str(value).strip().replace("/", "-")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
+        try:
+            naive = datetime.strptime(s, fmt)
+            return naive.replace(tzinfo=tz)
+        except ValueError:
+            continue
+    logger.warning("日時パース失敗: %r", value)
+    return None
+
+
+class Publisher:
+    def __init__(
+        self,
+        store: Store,
+        tz_name: str = "Asia/Tokyo",
+        max_posts_per_day: int = DEFAULT_MAX_POSTS_PER_DAY,
+        client_factory=ThreadsClient,
+        now_fn=None,
+        dry_run: bool = False,
+    ):
+        self.store = store
+        self.tz = ZoneInfo(tz_name)
+        self.max_posts_per_day = max_posts_per_day
+        self.client_factory = client_factory
+        self.now_fn = now_fn or (lambda: datetime.now(self.tz))
+        self.dry_run = dry_run
+
+    # ---------- トークン ----------
+    def refresh_tokens(self) -> None:
+        now = self.now_fn()
+        for acc in self.store.get_accounts():
+            updated = _parse_dt(acc.get("token_updated_at"), self.tz)
+            if updated is None:
+                # 手動投入直後の長期トークン。失効していない前提でリフレッシュせず、
+                # 次回以降に経過日数を測れるよう token_updated_at を now で初期化する。
+                # （リフレッシュは「24h以上経過」が条件なので、投入直後に叩くと必ず失敗する。）
+                if self.dry_run:
+                    logger.info("[dry-run] %s: token_updated_at を now で初期化", acc["account"])
+                    continue
+                self.store.update_account(
+                    acc["account"], {"token_updated_at": now.strftime("%Y-%m-%d %H:%M:%S")}
+                )
+                continue
+            if (now - updated) <= timedelta(days=REFRESH_AFTER_DAYS):
+                continue  # まだ更新不要（7日以内）
+            if self.dry_run:
+                logger.info("[dry-run] %s のトークンをリフレッシュ", acc["account"])
+                continue
+            try:
+                data = ThreadsClient.refresh_long_lived_token(acc["access_token"])
+                self.store.update_account(
+                    acc["account"],
+                    {"access_token": data["access_token"],
+                     "token_updated_at": now.strftime("%Y-%m-%d %H:%M:%S")},
+                )
+                logger.info("%s のトークンを更新 (expires_in=%s)", acc["account"], data.get("expires_in"))
+            except ThreadsAPIError as e:
+                logger.error("%s トークン更新失敗: %s", acc["account"], e)
+
+    # ---------- レート制限 ----------
+    def _daily_count(self, acc: dict, today: str) -> int:
+        if str(acc.get("daily_count_date")) == today:
+            try:
+                return int(acc.get("daily_count") or 0)
+            except ValueError:
+                return 0
+        return 0  # 日付が変わっていればリセット
+
+    # ---------- メイン ----------
+    def run(self) -> dict:
+        now = self.now_fn()
+        today = now.strftime("%Y-%m-%d")
+        self.refresh_tokens()
+
+        accounts = {a["account"]: a for a in self.store.get_accounts()}
+        posts = self.store.get_posts()
+
+        # row_id -> posted_id の既知マップ（ツリー親解決用）
+        posted_ids = {
+            p["row_id"]: p.get("posted_id")
+            for p in posts
+            if str(p.get("status")) == "posted" and p.get("posted_id")
+        }
+        # アカウント別の本日カウント
+        counts = {name: self._daily_count(acc, today) for name, acc in accounts.items()}
+
+        # 公開対象: status空/queued かつ 公開時刻到来。時刻昇順で処理（親が先に来る前提＋保険でリトライ）。
+        def is_due(p) -> bool:
+            status = str(p.get("status") or "").lower()
+            if status not in ("", "queued"):
+                return False
+            dt = _parse_dt(p.get("post_datetime"), self.tz)
+            return dt is not None and dt <= now
+
+        due = sorted(
+            [p for p in posts if is_due(p)],
+            key=lambda p: _parse_dt(p.get("post_datetime"), self.tz),
+        )
+
+        results = {"posted": 0, "skipped": 0, "error": 0, "deferred": 0}
+
+        for p in due:
+            row_id = p["row_id"]
+            account = p["account"]
+            acc = accounts.get(account)
+            if not acc:
+                self._mark_error(row_id, f"未登録アカウント: {account}")
+                results["error"] += 1
+                continue
+
+            # レート制限
+            if counts.get(account, 0) >= self.max_posts_per_day:
+                logger.info("%s は本日上限 (%d) に達したためスキップ", account, self.max_posts_per_day)
+                results["skipped"] += 1
+                continue
+
+            # ツリー: 親が未公開ならこの回は保留（次回リトライ）
+            reply_to_id = None
+            parent_row = str(p.get("reply_to") or "").strip()
+            if parent_row:
+                parent_posted = posted_ids.get(parent_row)
+                if not parent_posted:
+                    logger.info("row %s: 親 %s が未公開のため保留", row_id, parent_row)
+                    results["deferred"] += 1
+                    continue
+                reply_to_id = parent_posted
+
+            media_type = (p.get("media_type") or "TEXT").upper()
+            media_urls = self._split_media_urls(p.get("media_url")) if media_type == "CAROUSEL" else None
+            try:
+                if self.dry_run:
+                    new_id = f"DRYRUN-{row_id}"
+                    logger.info("[dry-run] 公開 row=%s account=%s reply_to=%s text=%r",
+                                row_id, account, reply_to_id, (p.get("text") or "")[:40])
+                else:
+                    # 二重投稿防止(write-ahead): API実行前にシート上で行を publishing で確保する。
+                    # 公開後に必ず posted へ更新する。途中でプロセスが落ちた場合は publishing が残り、
+                    # is_due の対象外になるため再投稿されない（復旧は手動で status を空に戻す）。
+                    self.store.update_post(row_id, {"status": "publishing"})
+                    client = self.client_factory(user_id=acc["user_id"], access_token=acc["access_token"])
+                    new_id = client.post(
+                        text=p.get("text") or None,
+                        media_type=media_type,
+                        image_url=p.get("media_url") or None,
+                        video_url=p.get("media_url") or None,
+                        media_urls=media_urls,
+                        reply_to_id=reply_to_id,
+                        reply_control=p.get("reply_control") or None,
+                    )
+            except ThreadsAPIError as e:
+                self._mark_error(row_id, str(e))
+                results["error"] += 1
+                logger.error("公開失敗 row=%s: %s", row_id, e)
+                continue
+
+            new_count = counts.get(account, 0) + 1
+            # DRY_RUN はシートを一切書き換えない（対象検出と疎通確認のみ）。
+            if not self.dry_run:
+                self.store.update_post(row_id, {
+                    "status": "posted",
+                    "posted_id": new_id,
+                    "posted_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+                    "error": "",
+                })
+                self.store.update_account(account, {
+                    "daily_count": new_count,
+                    "daily_count_date": today,
+                })
+            # ツリー親解決とレート計算のためのメモリ更新（dry/real 共通）。
+            counts[account] = new_count
+            posted_ids[row_id] = new_id
+            results["posted"] += 1
+            logger.info("公開成功 row=%s -> %s%s", row_id, new_id, " (dry-run)" if self.dry_run else "")
+
+        logger.info("実行結果: %s", results)
+        return results
+
+    def _mark_error(self, row_id: str, msg: str) -> None:
+        self.store.update_post(row_id, {"status": "error", "error": msg[:300]})
+
+    @staticmethod
+    def _split_media_urls(raw) -> list[str]:
+        """CAROUSEL用: media_url のカンマ/改行区切りを URL のリストに分解する。"""
+        return [u.strip() for u in re.split(r"[,\n]+", str(raw or "")) if u.strip()]
