@@ -19,14 +19,14 @@ import json
 import os
 import sys
 
-ACCOUNTS_HEADERS = [
-    "account", "user_id", "access_token",
-    "token_updated_at", "daily_count", "daily_count_date",
-]
-POSTS_HEADERS = [
-    "row_id", "account", "post_datetime", "text", "media_type", "media_url",
-    "reply_to", "reply_control", "status", "posted_id", "posted_at", "error",
-]
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from threads_poster.sheets import (  # noqa: E402
+    canonical_headers, ACCOUNTS_FIELD_ALIASES, POSTS_FIELD_ALIASES,
+)
+
+# 見出しは日本語（正規）。コード側は内部キー(英語)で扱い、sheets.py のエイリアスで対応づける。
+ACCOUNTS_HEADERS = canonical_headers(ACCOUNTS_FIELD_ALIASES)
+POSTS_HEADERS = canonical_headers(POSTS_FIELD_ALIASES)
 
 OK = "\033[92m✓\033[0m"
 NG = "\033[91m✗\033[0m"

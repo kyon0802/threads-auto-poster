@@ -2,6 +2,7 @@
 """
 Phase C ヘルパー: 長期トークンから user_id を取得し、accounts タブへ追記/更新する。
 任意で posts タブにテスト投稿(T1)も追加する。
+見出しが日本語/英語どちらでも動く（threads_poster.sheets のエイリアスを使用）。
 
 前提（環境変数。local_run.sh と同様に .env を source して渡す）:
   GOOGLE_SERVICE_ACCOUNT_FILE か GOOGLE_SERVICE_ACCOUNT_JSON
@@ -22,6 +23,11 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from threads_poster.sheets import (  # noqa: E402
+    header_maps, ACCOUNTS_FIELD_ALIASES, POSTS_FIELD_ALIASES,
+)
+
 GRAPH = "https://graph.threads.net"
 VER = "v1.0"
 
@@ -36,31 +42,38 @@ def load_service_account() -> dict:
     raise SystemExit("GOOGLE_SERVICE_ACCOUNT_FILE / _JSON が見つかりません")
 
 
-def upsert(ws, key_col: str, key_val: str, fields: dict) -> str:
+def upsert(ws, aliases: dict, key_internal: str, key_val: str, fields: dict) -> str:
+    """内部キー(英語)で受けた fields を、シートの実見出し(日/英)に合わせて追記 or 更新。"""
     import gspread
 
     header = ws.row_values(1)
+    to_internal, to_header = header_maps(header, aliases)
     col = {n: i + 1 for i, n in enumerate(header)}
-    if key_col not in col:
-        raise SystemExit(f"ヘッダに {key_col} がありません: {header}")
-    key_cells = ws.col_values(col[key_col])
+    key_header = to_header.get(key_internal)
+    if not key_header:
+        raise SystemExit(f"見出しに『{key_internal}』に対応する列がありません: {header}")
+    key_cells = ws.col_values(col[key_header])
     target = None
     for idx, val in enumerate(key_cells[1:], start=2):
         if str(val) == str(key_val):
             target = idx
             break
     if target is None:
-        row = [str(fields.get(n, "") or "") for n in header]
+        # 追記: 実見出しの並び順に、内部キー経由で値を並べる
+        row = []
+        for h in header:
+            ik = to_internal.get(h)
+            row.append(str(fields.get(ik, "") or "") if ik else "")
         ws.append_row(row, value_input_option="RAW")
-        return "appended"
+        return "追記"
     cells = [
-        gspread.Cell(target, col[n], "" if v is None else str(v))
-        for n, v in fields.items()
-        if n in col
+        gspread.Cell(target, col[to_header[ik]], "" if v is None else str(v))
+        for ik, v in fields.items()
+        if ik in to_header
     ]
     if cells:
         ws.update_cells(cells, value_input_option="RAW")
-    return "updated"
+    return "更新"
 
 
 def main() -> int:
@@ -106,43 +119,33 @@ def main() -> int:
     acct = args.account or username or "rk_riko2"
 
     # 3) accounts 追記/更新
-    how = upsert(
-        ws_a,
-        "account",
-        acct,
-        {
-            "account": acct,
-            "user_id": user_id,
-            "access_token": token,
-            "token_updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "daily_count": "",
-            "daily_count_date": "",
-        },
-    )
+    how = upsert(ws_a, ACCOUNTS_FIELD_ALIASES, "account", acct, {
+        "account": acct,
+        "user_id": user_id,
+        "access_token": token,
+        "token_updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "daily_count": "",
+        "daily_count_date": "",
+    })
     print(f"OK accounts {how}  account={acct}")
 
     # 4) 任意: テスト投稿
     if args.add_test_post:
         dt = (now - timedelta(minutes=2)).strftime("%Y-%m-%d %H:%M")
-        how_p = upsert(
-            ws_p,
-            "row_id",
-            "T1",
-            {
-                "row_id": "T1",
-                "account": acct,
-                "post_datetime": dt,
-                "text": "接続テスト：自動投稿システムの疎通確認です。確認後に削除します。",
-                "media_type": "TEXT",
-                "media_url": "",
-                "reply_to": "",
-                "reply_control": "",
-                "status": "",
-                "posted_id": "",
-                "posted_at": "",
-                "error": "",
-            },
-        )
+        how_p = upsert(ws_p, POSTS_FIELD_ALIASES, "row_id", "T1", {
+            "row_id": "T1",
+            "account": acct,
+            "post_datetime": dt,
+            "text": "接続テスト：自動投稿システムの疎通確認です。確認後に削除します。",
+            "media_type": "TEXT",
+            "media_url": "",
+            "reply_to": "",
+            "reply_control": "",
+            "status": "",
+            "posted_id": "",
+            "posted_at": "",
+            "error": "",
+        })
         print(f"OK posts {how_p}  row_id=T1  post_datetime={dt}（JST・2分前=即時公開対象）")
 
     return 0
