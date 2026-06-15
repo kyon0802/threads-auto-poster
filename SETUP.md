@@ -111,21 +111,19 @@ DRY_RUN=1 python3 main.py        # 実投稿せず疎通確認（要 Phase A/B/C
 
 ## Phase C — トークンをシートへ → DRY_RUN疎通 → 実投稿テスト
 
-### C-1. 短期 → 長期トークンに交換
-- [ ] `export THREADS_CLIENT_SECRET="<App secret>"`
-- [ ] `python3 bootstrap_token.py <短期トークン>`
-- [ ] 出力された **長期トークン（60日）** をコピー。
+### C-1. 長期トークン（60日）を取得
+**最短＝アプリ内のトークン生成ツール**: Metaアプリ「ユースケース→Threads APIにアクセス→カスタマイズ→設定」を一番下までスクロール →「ユーザートークン生成ツール」で投稿アカウントを選び生成（要: テスター承認済み）。表示された長期トークンをコピー。
+- [ ] 代替（OAuth code 方式）: `python3 scripts/get_auth_url.py` → 承認 → `code` を `python3 scripts/exchange_token.py <code>`（要 `THREADS_APP_ID`/`THREADS_CLIENT_SECRET`/`THREADS_REDIRECT_URI`）。
+- ※ **テスター招待の承認は Threadsアプリ側「設定→アカウント→ウェブサイトのアクセス許可」**で行う（Meta開発者画面ではない＝最大のハマりどころ）。
 
-### C-2. accounts タブに記入
-- [ ] `account` … 任意の識別名（例 `seizo_kyujin`）。postsタブからこの名前で紐づく。
-- [ ] `user_id` … B-4で控えたThreadsのuser_id。
-- [ ] `access_token` … C-1の長期トークン。
-- [ ] `token_updated_at` … 今日の日時（例 `2026-06-08 12:00:00`）。
-- [ ] `daily_count` / `daily_count_date` … 空でよい（システムが埋める）。
+### C-2. accounts タブへ登録（`scripts/setup_account.py` が自動化）
+- [ ] トークンを一時ファイルに保存 → `set -a; . ./.env; set +a; python3 scripts/setup_account.py --token-file <path> --account <識別名>`
+      → トークンから **user_id を自動取得**し、`accounts` タブ（日本語見出し: アカウント / ユーザーID / アクセストークン / トークン更新日時 / 本日投稿数 / カウント日付）へ追記。
+- [ ] 手動で入れる場合: `アカウント`=識別名、`ユーザーID`、`アクセストークン`、`トークン更新日時`=今日の日時。`本日投稿数`/`カウント日付` は空でよい。
 
-### C-3. posts タブにテスト投稿を1件入れる
-- [ ] `row_id` = `T1`、`account` = C-2のaccount名、`post_datetime` = 数分後のJST、`text` = テスト本文、
-      `media_type` = `TEXT`、他は空、`status` = 空 or `queued`。
+### C-3. 投稿タブを用意してテスト投稿を1件入れる
+- [ ] `python3 scripts/setup_post_tab.py --account <識別名> --update-examples` で **`投稿_<識別名>` タブ**を作成 → `python3 scripts/add_validation_ja.py --tab 投稿_<識別名>` でドロップダウン/日時チェックを付与。
+- [ ] その `投稿_<識別名>` タブに1行: `投稿ID`=`T1`、`投稿日時`=数分後のJST（例 `2026-06-16 21:00`）、`本文`=テスト本文、`メディア種類`=`TEXT`、`状態`=空。※アカウント列は無い（タブ名で判別）。
 
 ### C-4. ローカルで疎通（投稿しない）
 - [ ] 環境変数をセット:
@@ -187,7 +185,7 @@ DRY_RUN=1 python3 main.py        # 実投稿せず疎通確認（要 Phase A/B/C
 
 ## 落とし穴（運用前に確認）
 
-- ヘッダ名は完全一致。1文字違うと読めない。
+- ヘッダは日本語(正規)/英語(旧名)どちらでも可（`sheets.py` のエイリアスが吸収）。ただし定義外の語にすると読めない。投稿タブ名は `投稿_<account>` で、`<account>` は accounts の名前と一致させる。タブ名・見出し行は消さない。
 - cronはUTC、投稿時刻判定はJST（混同しない）。
 - GitHub Actionsのcronは数分遅延あり（秒単位の正確投稿は不可）。
 - トークンをシートに置くため、共有は本人＋サービスアカウントのみ。公開リンク禁止。
