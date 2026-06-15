@@ -106,9 +106,10 @@ class Publisher:
         accounts = {a["account"]: a for a in self.store.get_accounts()}
         posts = self.store.get_posts()
 
-        # row_id -> posted_id の既知マップ（ツリー親解決用）
+        # row_id -> posted_id の既知マップ（ツリー親解決用）。
+        # 投稿IDが数値だけ（例 1, 2）でもツリーが壊れないよう、キーは常に str に正規化する。
         posted_ids = {
-            p["row_id"]: p.get("posted_id")
+            str(p["row_id"]): p.get("posted_id")
             for p in posts
             if str(p.get("status")) == "posted" and p.get("posted_id")
         }
@@ -131,7 +132,7 @@ class Publisher:
         results = {"posted": 0, "skipped": 0, "error": 0, "deferred": 0}
 
         for p in due:
-            row_id = p["row_id"]
+            row_id = str(p["row_id"])  # 数値IDでも str に統一（ツリー連結・書き戻しの一致用）
             account = p["account"]
             acc = accounts.get(account)
             if not acc:
