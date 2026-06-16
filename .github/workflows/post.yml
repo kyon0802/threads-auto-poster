@@ -32,4 +32,6 @@ jobs:
           # 1アカ1日上限はリポジトリ Variable で一元管理（Settings → Secrets and variables
           # → Actions → Variables に MAX_POSTS_PER_DAY を作成）。未設定なら 50。
           MAX_POSTS_PER_DAY: ${{ vars.MAX_POSTS_PER_DAY || '50' }}
+          # ツリー返信を人間らしいテンポで送る間隔(秒)。Variable未設定なら30。
+          TREE_REPLY_DELAY_SEC: ${{ vars.TREE_REPLY_DELAY_SEC || '30' }}
         run: python main.py

@@ -5,6 +5,7 @@
   SPREADSHEET_ID              : スプレッドシートID
   TZ_NAME                     : タイムゾーン (既定 Asia/Tokyo)
   MAX_POSTS_PER_DAY           : 1アカウント1日上限 (既定 50)
+  TREE_REPLY_DELAY_SEC        : ツリー返信を空ける秒数 (既定 30)
   DRY_RUN                     : "1" なら実際には投稿しない
 """
 import os
@@ -27,6 +28,7 @@ def main() -> int:
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     tz_name = os.environ.get("TZ_NAME", "Asia/Tokyo")
     max_per_day = int(os.environ.get("MAX_POSTS_PER_DAY", "50"))
+    tree_delay = int(os.environ.get("TREE_REPLY_DELAY_SEC", "30"))
     dry_run = os.environ.get("DRY_RUN") == "1"
 
     if not sa_json or not spreadsheet_id:
@@ -34,7 +36,8 @@ def main() -> int:
         return 1
 
     store = GoogleSheetStore(json.loads(sa_json), spreadsheet_id)
-    pub = Publisher(store, tz_name=tz_name, max_posts_per_day=max_per_day, dry_run=dry_run)
+    pub = Publisher(store, tz_name=tz_name, max_posts_per_day=max_per_day,
+                    tree_reply_delay_sec=tree_delay, dry_run=dry_run)
     res = pub.run()
     log.info("完了: %s", res)
     return 0 if res["error"] == 0 else 2

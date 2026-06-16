@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -48,6 +49,7 @@ class Publisher:
         client_factory=ThreadsClient,
         now_fn=None,
         dry_run: bool = False,
+        tree_reply_delay_sec: int = 0,
     ):
         self.store = store
         self.tz = ZoneInfo(tz_name)
@@ -55,6 +57,8 @@ class Publisher:
         self.client_factory = client_factory
         self.now_fn = now_fn or (lambda: datetime.now(self.tz))
         self.dry_run = dry_run
+        # 同じ回で親を公開した直後の子（ツリー返信）を待つ秒数。人間らしいテンポにする。
+        self.tree_reply_delay_sec = tree_reply_delay_sec
 
     # ---------- トークン ----------
     def refresh_tokens(self) -> None:
@@ -97,6 +101,28 @@ class Publisher:
                 return 0
         return 0  # 日付が変わっていればリセット
 
+    @staticmethod
+    def _order_parents_first(due_list: list[dict]) -> list[dict]:
+        """時刻順を保ちつつ、ツリーの親を必ず子より前に並べ替える（行順・同時刻に依存しない）。"""
+        by_id = {str(p["row_id"]): p for p in due_list}
+        ordered: list[dict] = []
+        visited: set[str] = set()
+
+        def emit(p: dict, chain: set) -> None:
+            rid = str(p["row_id"])
+            if rid in visited or rid in chain:
+                return
+            parent = str(p.get("reply_to") or "").strip()
+            if parent and parent in by_id:
+                emit(by_id[parent], chain | {rid})  # 親を先に
+            if rid not in visited:
+                visited.add(rid)
+                ordered.append(p)
+
+        for p in due_list:
+            emit(p, set())
+        return ordered
+
     # ---------- メイン ----------
     def run(self) -> dict:
         now = self.now_fn()
@@ -124,12 +150,15 @@ class Publisher:
             dt = _parse_dt(p.get("post_datetime"), self.tz)
             return dt is not None and dt <= now
 
-        due = sorted(
-            [p for p in posts if is_due(p)],
-            key=lambda p: _parse_dt(p.get("post_datetime"), self.tz),
+        due = self._order_parents_first(
+            sorted(
+                [p for p in posts if is_due(p)],
+                key=lambda p: _parse_dt(p.get("post_datetime"), self.tz),
+            )
         )
 
         results = {"posted": 0, "skipped": 0, "error": 0, "deferred": 0}
+        posted_this_run: set[str] = set()  # この回で公開した投稿ID（ツリー間隔判定用）
 
         for p in due:
             row_id = str(p["row_id"])  # 数値IDでも str に統一（ツリー連結・書き戻しの一致用）
@@ -156,6 +185,13 @@ class Publisher:
                     results["deferred"] += 1
                     continue
                 reply_to_id = parent_posted
+
+            # ツリー返信を人間らしいテンポで：同じ回で親を公開した直後の子は少し間を空ける。
+            if reply_to_id and parent_row in posted_this_run and self.tree_reply_delay_sec > 0:
+                if self.dry_run:
+                    logger.info("[dry-run] ツリー間隔 %d秒を空ける（row=%s）", self.tree_reply_delay_sec, row_id)
+                else:
+                    time.sleep(self.tree_reply_delay_sec)
 
             media_type = (p.get("media_type") or "TEXT").upper()
             media_urls = self._split_media_urls(p.get("media_url")) if media_type == "CAROUSEL" else None
@@ -201,6 +237,7 @@ class Publisher:
             # ツリー親解決とレート計算のためのメモリ更新（dry/real 共通）。
             counts[account] = new_count
             posted_ids[row_id] = new_id
+            posted_this_run.add(row_id)
             results["posted"] += 1
             logger.info("公開成功 row=%s -> %s%s", row_id, new_id, " (dry-run)" if self.dry_run else "")
 
