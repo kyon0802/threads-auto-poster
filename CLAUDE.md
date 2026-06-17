@@ -50,7 +50,7 @@ GitHub Actions（10分おき cron / 手動実行可）→ main.py → Threads AP
 - [x] Meta アプリ作成（`threads_basic`/`threads_content_publish`）＋ 投稿アカウントを **Threadsテスター** に追加・承認
 - [x] 長期トークン取得 → accounts タブへ。※実機では **アプリの「ユースケース→カスタマイズ→設定→ユーザートークン生成ツール」が最短**（OAuth code 方式 `get_auth_url.py`→`exchange_token.py` も可）。**テスター招待の承認は Threadsアプリ側「設定→アカウント→ウェブサイトのアクセス許可」**で行う（Meta開発者画面ではない＝最大のハマりどころ）。リダイレクトURIは「カスタマイズ→設定」内で、入力後にドロップダウン候補をクリックして確定が必要。
 - [x] GitHub へ push ＋ Secrets 登録 ＋ Actions 有効化 → **private repo `kyon0802/threads-auto-poster`**、10分cron稼働中
-- [x] 本番の実投稿テスト成功（2026-06-14、account=`rk_riko2`）
+- [x] 本番の実投稿テスト成功（2026-06-14、account=`takumi_kojo_navi`〔旧handle `rk_riko2`、2026-06-18にThreads側で改名。user_id/トークンは不変〕）
 - [ ]（将来）第三者運用／販売フェーズで `threads_content_publish` の **App Review** を申請（Phase E）
 
 ---
@@ -112,7 +112,7 @@ requirements.txt / .env.example / README.md / SETUP.md
 **`accounts` タブ**（日本語見出し / 旧英語も可）:
 `アカウント`(account) / `ユーザーID`(user_id) / `アクセストークン`(access_token) / `トークン更新日時`(token_updated_at) / `本日投稿数`(daily_count) / `カウント日付`(daily_count_date)
 
-**投稿タブ = アカウントごとに分割**。タブ名 **`投稿_<アカウント名>`**（例 `投稿_rk_riko2`、`<アカウント名>`は accounts の `アカウント` と一致）。**アカウントはタブ名から自動判定するので「アカウント」列は持たない**。見出し:
+**投稿タブ = アカウントごとに分割**。タブ名 **`投稿_<アカウント名>`**（例 `投稿_takumi_kojo_navi`、`<アカウント名>`は accounts の `アカウント` と一致）。**アカウントはタブ名から自動判定するので「アカウント」列は持たない**。見出し:
 `投稿ID`(row_id) / `投稿日時`(post_datetime, JST `YYYY-MM-DD HH:MM`・文字列書式) / `本文`(text) / `メディア種類`(media_type, ドロップダウン TEXT/IMAGE/VIDEO/CAROUSEL) / `メディアURL`(media_url) / `返信先ID`(reply_to=親の投稿ID) / `返信できる人`(reply_control) / `状態`(status, ドロップダウン) / `投稿後ID`(posted_id) / `投稿実施日時`(posted_at) / `エラー`(error)
 
 - **後方互換**: 単一 `posts` タブ（`アカウント`列あり）も読める。`投稿_*` タブが1つも無いときだけ `posts` を見る。
@@ -203,9 +203,17 @@ requirements.txt / .env.example / README.md / SETUP.md
 
 ## 12. 改修ログ（2026-06-14〜15）本番稼働＋シートUX
 
-- **本番稼働（Phase B/C/D 完了）**: account=`rk_riko2` で実投稿成功（2026-06-14）。private repo `kyon0802/threads-auto-poster`、10分cron稼働。Secrets=`GOOGLE_SERVICE_ACCOUNT_JSON`/`SPREADSHEET_ID`、Variable=`MAX_POSTS_PER_DAY`。gh CLI は `/opt/homebrew/bin/gh`（PATH未通）でアカウント kyon0802・scope に workflow 追加済み。
+- **本番稼働（Phase B/C/D 完了）**: account=`takumi_kojo_navi`（旧handle `rk_riko2`）で実投稿成功（2026-06-14）。private repo `kyon0802/threads-auto-poster`、10分cron稼働。Secrets=`GOOGLE_SERVICE_ACCOUNT_JSON`/`SPREADSHEET_ID`、Variable=`MAX_POSTS_PER_DAY`。gh CLI は `/opt/homebrew/bin/gh`（PATH未通）でアカウント kyon0802・scope に workflow 追加済み。
 - **シート見出しの日本語化（後方互換つき）**: `sheets.py` にエイリアス層（内部キー(英語)⇔日/英見出し）。`migrate_headers_ja.py` で既存シートをデータ保持のまま日本語化。
 - **アカウント別タブ化**: 投稿タブを `投稿_<account>` で複数持てるように（タブ名からアカウント自動判定＝行に書かない）。`setup_post_tab.py` で生成。複数アカは**1シート・1リポジトリ**で運用（分けるのは Phase E のみ）。
 - **入力支援**: `add_validation_ja.py` で `メディア種類`/`状態`=ドロップダウン、`投稿日時`=形式チェック＋文字列書式。`記入例` タブにツリー例。
 - **local_run.sh 修正**: コマンドラインの `DRY_RUN` を `.env` より優先（`DRY_RUN=0 ./scripts/local_run.sh` が実投稿になるよう）。
 - 既知メンテ: `post.yml` の `actions/checkout@v4`・`setup-python@v5` が Node20非推奨警告（2026-09-16撤去予定。動作は継続）。
+
+---
+
+## 13. 改修ログ（2026-06-16〜18）障害対応・失敗通知・アカウント改名
+
+- **API access blocked 障害（2026-06-16）**: 投稿が全停止。原因は Meta側がトークンを全API一律 `OAuthException code 200 "API access blocked."` でブロック（=アプリ/アカウント主体への制限。トークン失効 code 190 とは別物で `refresh_access_token` すら弾かれる）。コード/cron/シートは正常。**Threadsアプリの「不正アクセス検知」をユーザーが承認・解除して復旧**。`error` で止まった行は `状態` を空に戻し再投稿。切り分けは「シートからトークンを読み `GET /v1.0/me` を `requests` で叩く」（urllibはmacOSのSSL CERT_VERIFY_FAILEDで不可）。
+- **失敗メール通知を有効化（2026-06-18）**: GitHub純正のActions失敗通知を利用。投稿エラー時は `main.py` が exit code 2 → run failure 扱い → メール送信。受信先 `morll.0802@gmail.com`（Settings→Notifications→Default notifications email＋System→Actions=Email/"failed workflows only"）。実テスト済み。※長時間ブロック時は10分毎にメールが来るため、将来シートでalert抑制する案あり。
+- **アカウント改名（2026-06-18）**: Threads側で handle を `rk_riko2` → **`takumi_kojo_navi`** に変更。**user_id(36368336406145487)・アクセストークンは不変**（handle変更はトークンを無効化しない＝`GET /me` でid同一・username更新を確認済み）。システム側の表記を全て更新: シート（`accounts` の `アカウント` 値＋投稿タブ名 `投稿_rk_riko2`→`投稿_takumi_kojo_navi`）、`setup_account.py`/`setup_post_tab.py`/`migrate_headers_ja.py` の既定値・例、本ファイルの記述。**今後アカウント名を指すときは `takumi_kojo_navi`**。

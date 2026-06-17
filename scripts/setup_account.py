@@ -10,7 +10,7 @@ Phase C ヘルパー: 長期トークンから user_id を取得し、accounts �
 
 使い方:
   set -a; . ./.env; set +a
-  python3 scripts/setup_account.py --token-file ~/.config/threads-poster/token.tmp --account rk_riko2 --add-test-post
+  python3 scripts/setup_account.py --token-file ~/.config/threads-poster/token.tmp --account takumi_kojo_navi --add-test-post
 """
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ def upsert(ws, aliases: dict, key_internal: str, key_val: str, fields: dict) -> 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--token-file", required=True)
-    ap.add_argument("--account", default="rk_riko2")
+    ap.add_argument("--account", default="takumi_kojo_navi")
     ap.add_argument("--add-test-post", action="store_true")
     args = ap.parse_args()
 
@@ -116,7 +116,7 @@ def main() -> int:
     ws_p = sh.worksheet("posts")
 
     now = datetime.now(ZoneInfo("Asia/Tokyo"))
-    acct = args.account or username or "rk_riko2"
+    acct = args.account or username or "takumi_kojo_navi"
 
     # 3) accounts 追記/更新
     how = upsert(ws_a, ACCOUNTS_FIELD_ALIASES, "account", acct, {

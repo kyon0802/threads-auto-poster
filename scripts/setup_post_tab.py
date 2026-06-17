@@ -11,7 +11,7 @@
 前提環境変数: GOOGLE_SERVICE_ACCOUNT_FILE/_JSON, SPREADSHEET_ID
 使い方:
   set -a; . ./.env; set +a
-  python3 scripts/setup_post_tab.py --account rk_riko2 --from-posts --update-examples
+  python3 scripts/setup_post_tab.py --account takumi_kojo_navi --from-posts --update-examples
   python3 scripts/setup_post_tab.py --account second_acc   # 2アカ目以降は新規作成
 """
 from __future__ import annotations
