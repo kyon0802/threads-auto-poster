@@ -230,3 +230,13 @@ requirements.txt / .env.example / README.md / SETUP.md
   - **安全性**: 書き込み(`update_cells`)は特定セルへの RAW **上書き**（追記ではない）なので再試行は**冪等**＝二重投稿リスクなし。Threads publish 層（write-ahead `publishing`→`posted`）は `with_retry` の外で不介入。
 - **検証**: `test_logic.py` に TEST 7〜11 追加（502再試行で成功 / 404即送出 / 試行使い切りで送出 / network例外も再試行 / ValueError等は再試行しない）。全11テスト PASS ＋ 実シート DRY_RUN 成功。`threads-code-reviewer` レビュー通過（major=network例外取りこぼしを修正済み）。
 - **既知の据え置き（minor, 現運用規模で実害小）**: ①広域障害時は各呼び出しが最大30秒粘り run 全体が伸び得る（ただし最初の呼び出しで早期 fail するため限定的）。②429 は `Retry-After` を尊重せず固定バックオフ（将来アカウント/投稿数が増えたら検討）。
+
+---
+
+## 15. 改修ログ（2026-06-18）2アカウント目 `miko_yui_musubi` 追加
+
+- **2アカウント目を本番投入（2026-06-18）**: `miko_yui_musubi`（**user_id `36383330141313377`**）。takumi_kojo_navi と**同一 Meta アプリ・同一シート・同一リポジトリ**に相乗り（テスター方式。CLAUDE.md §12 の運用方針どおり）。**現在のアカウントは takumi_kojo_navi / miko_yui_musubi の2つ**。投稿タブはそれぞれ `投稿_takumi_kojo_navi` / `投稿_miko_yui_musubi`。
+- **追加手順（次アカ追加時のテンプレ）**: ①Threadsテスターに追加（Meta開発者ダッシュボード）＋**本人アカウントで招待を承認（Threadsアプリ側：設定→アカウント→ウェブサイトのアクセス許可）** → ②ダッシュボードの**ユーザートークン生成ツール**で長期トークン発行 → ③`setup_post_tab.py --account <名>` ＋ `add_validation_ja.py --tab 投稿_<名>` でタブ生成 → ④`setup_account.py --token-file <file> --account <名>` で accounts 登録（`GET /me` で user_id 自動取得）。
+- **★ハマりどころ（今回実際に詰まった）**: トークン生成ツールは「**今ブラウザで Threads にログイン中のアカウント**」に発行する（アカウント選択UIではない）。takumi でログインしたままだと "takumi_kojo_naviとして続行" しか出ず miko を選べない。**シークレット/別ウィンドウで miko にログインし直してやり直す**のが正解。同意画面は「<対象アカウント名>として続行」と出るので、対象名を必ず確認してから続行する。
+- **トークンの種別判定**: ダッシュボード生成トークンは**長期**。短期→長期交換API `th_exchange_token` に長期トークンを渡すと `code 452 "Session key invalid"` が返る（＝既に長期である証左）。`GET /v1.0/me` が 200 なら有効。手動投入直後は `token_updated_at` を現在時刻で記録するため不要な refresh は走らない（§11）。**新アカのトークンを発行・確認したら、念のためローテーション（再発行）推奨**（取得経路にトークンが残るため）。
+- **`setup_account.py` バグ修正**: `ws_p = sh.worksheet("posts")` を**無条件で**開いていたため、`posts` をリネーム済みのアカウント別運用では新アカ登録時に `WorksheetNotFound` でクラッシュしていた。投稿先を `投稿_<account>`（無ければ `posts` にフォールバック）へ変更し、`--add-test-post` 指定時のみ開くようにした。

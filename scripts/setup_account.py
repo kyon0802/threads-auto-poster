@@ -25,7 +25,7 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from threads_poster.sheets import (  # noqa: E402
-    header_maps, ACCOUNTS_FIELD_ALIASES, POSTS_FIELD_ALIASES,
+    header_maps, ACCOUNTS_FIELD_ALIASES, POSTS_FIELD_ALIASES, POSTS_TAB_PREFIX,
 )
 
 GRAPH = "https://graph.threads.net"
@@ -113,7 +113,6 @@ def main() -> int:
     gc = gspread.authorize(creds)
     sh = gc.open_by_key(os.environ["SPREADSHEET_ID"])
     ws_a = sh.worksheet("accounts")
-    ws_p = sh.worksheet("posts")
 
     now = datetime.now(ZoneInfo("Asia/Tokyo"))
     acct = args.account or username or "takumi_kojo_navi"
@@ -129,8 +128,20 @@ def main() -> int:
     })
     print(f"OK accounts {how}  account={acct}")
 
-    # 4) 任意: テスト投稿
+    # 4) 任意: テスト投稿。アカウント別タブ「投稿_<account>」に入れる
+    #    （無ければ後方互換で単一 "posts" タブにフォールバック）。
     if args.add_test_post:
+        post_tab = f"{POSTS_TAB_PREFIX}{acct}"
+        try:
+            ws_p = sh.worksheet(post_tab)
+        except gspread.exceptions.WorksheetNotFound:
+            try:
+                ws_p = sh.worksheet("posts")
+            except gspread.exceptions.WorksheetNotFound:
+                raise SystemExit(
+                    f"テスト投稿先タブが見つかりません。先に "
+                    f"`python3 scripts/setup_post_tab.py --account {acct}` でタブ『{post_tab}』を作成してください。"
+                )
         dt = (now - timedelta(minutes=2)).strftime("%Y-%m-%d %H:%M")
         how_p = upsert(ws_p, POSTS_FIELD_ALIASES, "row_id", "T1", {
             "row_id": "T1",
