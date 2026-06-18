@@ -16,7 +16,56 @@
 """
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
+
+log = logging.getLogger("sheets")
+
+# Google Sheets API のサーバ側瞬断とみなす HTTP ステータス。
+# 502/503/504 = ゲートウェイ/一時障害、500 = サーバ内部エラー、429 = レート制限。
+# いずれも Google 自身が「少し待って再試行」を指示する一過性エラーで、再試行で回復する。
+# （2026-06-18 に accounts タブ読込中の 502 で run が落ち、誤報メールが出たため導入）
+_TRANSIENT_HTTP_STATUS = (429, 500, 502, 503, 504)
+
+
+def _is_transient(exc) -> bool:
+    """一過性（再試行で回復し得る）のサーバ/ネットワーク障害か判定する。True のものだけ再試行。
+    1) gspread.exceptions.APIError 等で HTTP ステータスが _TRANSIENT_HTTP_STATUS のとき。
+    2) 応答到達前の network 障害（接続リセット/タイムアウト/DNS瞬断）。requests はこれらを
+       ConnectionError/Timeout で投げ .response is None になるため、(1) では拾えない。
+    上記以外（404/403 等の恒久エラーや通常のバグ例外）は False＝再試行しない。"""
+    resp = getattr(exc, "response", None)
+    if getattr(resp, "status_code", None) in _TRANSIENT_HTTP_STATUS:
+        return True
+    from requests.exceptions import ConnectionError as ReqConnectionError, Timeout
+    return isinstance(exc, (ReqConnectionError, Timeout))
+
+
+def with_retry(fn, *, attempts: int = 5, base_delay: float = 2.0, sleep=None, on_retry=None):
+    """fn() を実行し、一過性のサーバエラーなら指数バックオフで再試行する。
+    - 一過性でない例外はそのまま即送出（再試行しない）。
+    - attempts 回試して最後も一過性エラーなら、その例外を送出する。
+    sleep / on_retry は注入可能（テスト用）。実運用の sleep は time.sleep。"""
+    if sleep is None:
+        import time
+        sleep = time.sleep
+    last_exc = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if not _is_transient(exc) or i == attempts - 1:
+                raise
+            delay = base_delay * (2 ** i)
+            if on_retry is not None:
+                on_retry(i + 1, delay, exc)
+            else:
+                status = getattr(getattr(exc, "response", None), "status_code", "?")
+                log.warning("Google Sheets 一過性エラー(HTTP %s)。%.1f秒後に再試行 (%d/%d)",
+                            status, delay, i + 1, attempts)
+            sleep(delay)
+    raise last_exc  # 到達しない（最終試行は上の raise で抜ける）
 
 
 # 内部キー(英語) -> 受け付ける見出し名（先頭=正規の日本語見出し。英語の旧名も後方互換で受理）。
@@ -96,8 +145,9 @@ class GoogleSheetStore(Store):
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
         creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
         gc = gspread.authorize(creds)
-        self.sh = gc.open_by_key(spreadsheet_id)
-        self.ws_accounts = self.sh.worksheet("accounts")
+        # 以降の gspread 呼び出しは Google 側の一過性 5xx/429 を with_retry で吸収する。
+        self.sh = with_retry(lambda: gc.open_by_key(spreadsheet_id))
+        self.ws_accounts = with_retry(lambda: self.sh.worksheet("accounts"))
         self.posts_tabs = self._discover_posts_tabs()
 
     def _discover_posts_tabs(self):
@@ -106,18 +156,18 @@ class GoogleSheetStore(Store):
         - 1つも無ければ後方互換で単一 "posts" タブ（アカウントは行の「アカウント」列から）
         """
         tabs = []
-        for ws in self.sh.worksheets():
+        for ws in with_retry(self.sh.worksheets):
             if ws.title.startswith(POSTS_TAB_PREFIX):
                 tabs.append((ws, ws.title[len(POSTS_TAB_PREFIX):]))
         if not tabs:
             try:
-                tabs.append((self.sh.worksheet("posts"), None))
+                tabs.append((with_retry(lambda: self.sh.worksheet("posts")), None))
             except Exception:  # noqa: BLE001
                 pass
         return tabs
 
     def _read(self, ws, aliases) -> list[dict]:
-        records = ws.get_all_records()  # 1行目をヘッダとして dict のリスト
+        records = with_retry(ws.get_all_records)  # 1行目をヘッダとして dict のリスト
         if not records:
             return []
         to_internal, _ = header_maps(records[0].keys(), aliases)
@@ -140,13 +190,13 @@ class GoogleSheetStore(Store):
         """ws 内で key を探し、見つかれば更新して True。無ければ False。"""
         import gspread
 
-        header = ws.row_values(1)
+        header = with_retry(lambda: ws.row_values(1))
         to_internal, to_header = header_maps(header, aliases)
         col_index = {name: i + 1 for i, name in enumerate(header)}
         key_header = to_header.get(key_internal)
         if not key_header or key_header not in col_index:
             return False
-        key_cells = ws.col_values(col_index[key_header])
+        key_cells = with_retry(lambda: ws.col_values(col_index[key_header]))
         target_row = None
         for idx, val in enumerate(key_cells[1:], start=2):  # ヘッダ除く
             if str(val) == str(key_val):
@@ -161,7 +211,8 @@ class GoogleSheetStore(Store):
             if internal in to_header and to_header[internal] in col_index
         ]
         if cells:
-            ws.update_cells(cells, value_input_option="RAW")
+            # 特定セルへの上書き（追記ではない）なので、一過性エラーでの再試行は冪等。
+            with_retry(lambda: ws.update_cells(cells, value_input_option="RAW"))
         return True
 
     def update_account(self, account: str, fields: dict) -> None:

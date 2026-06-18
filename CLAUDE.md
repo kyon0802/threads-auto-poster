@@ -217,3 +217,16 @@ requirements.txt / .env.example / README.md / SETUP.md
 - **API access blocked 障害（2026-06-16）**: 投稿が全停止。原因は Meta側がトークンを全API一律 `OAuthException code 200 "API access blocked."` でブロック（=アプリ/アカウント主体への制限。トークン失効 code 190 とは別物で `refresh_access_token` すら弾かれる）。コード/cron/シートは正常。**Threadsアプリの「不正アクセス検知」をユーザーが承認・解除して復旧**。`error` で止まった行は `状態` を空に戻し再投稿。切り分けは「シートからトークンを読み `GET /v1.0/me` を `requests` で叩く」（urllibはmacOSのSSL CERT_VERIFY_FAILEDで不可）。
 - **失敗メール通知を有効化（2026-06-18）**: GitHub純正のActions失敗通知を利用。投稿エラー時は `main.py` が exit code 2 → run failure 扱い → メール送信。受信先 `morll.0802@gmail.com`（Settings→Notifications→Default notifications email＋System→Actions=Email/"failed workflows only"）。実テスト済み。※長時間ブロック時は10分毎にメールが来るため、将来シートでalert抑制する案あり。
 - **アカウント改名（2026-06-18）**: Threads側で handle を `rk_riko2` → **`takumi_kojo_navi`** に変更。**user_id(36368336406145487)・アクセストークンは不変**（handle変更はトークンを無効化しない＝`GET /me` でid同一・username更新を確認済み）。システム側の表記を全て更新: シート（`accounts` の `アカウント` 値＋投稿タブ名 `投稿_rk_riko2`→`投稿_takumi_kojo_navi`）、`setup_account.py`/`setup_post_tab.py`/`migrate_headers_ja.py` の既定値・例、本ファイルの記述。**今後アカウント名を指すときは `takumi_kojo_navi`**。
+
+---
+
+## 14. 改修ログ（2026-06-18）Google Sheets 一過性エラーの自動リトライ
+
+- **誤報メール障害（2026-06-18 16:00 JST / 07:00 UTC）**: run が1回だけ失敗し失敗メールが届いた。原因は **Google スプレッドシート側の一時的 HTTP 502**（`GoogleSheetStore.__init__` の `worksheet("accounts")` ＝ gspread 呼び出しで `APIError(502)` が未捕捉 → 投稿ロジック到達前に exit 1 → run失敗 → メール）。**Threads API でもトークンでもない**＝§13 の「API access blocked(code 200, Meta主体ブロック)」とは**全くの別物**（あちらは人の承認解除が必須、こちらは自己回復する一過性）。実害ゼロ（落ちたのが書き込み前なので `publishing`/`error` の中断痕なし・データ無傷）、次の cron(07:10 UTC)以降は自動回復済みだった。
+- **根本原因**: `GoogleSheetStore` の gspread 呼び出しに**リトライが皆無**だった。Google 側は 5xx/429 や接続瞬断を日常的に返すため、いつでも再発し得た。
+- **修正**: `threads_poster/sheets.py` に `with_retry(fn, attempts=5, base_delay=2.0)` ＋ `_is_transient(exc)` を追加し、**全 gspread ネットワーク呼び出し**（open_by_key / worksheet / worksheets / get_all_records / row_values / col_values / update_cells）をラップ。指数バックオフ（2→4→8→16秒）で自動再試行する。
+  - **再試行する**: HTTP **429/500/502/503/504**（=APIErrorの`.response.status_code`）＋ **応答到達前の network 障害**（`requests` の `ConnectionError`/`Timeout`＝`.response is None` のもの）。
+  - **再試行しない（即送出）**: 404/403 等の恒久エラーや通常のバグ例外。
+  - **安全性**: 書き込み(`update_cells`)は特定セルへの RAW **上書き**（追記ではない）なので再試行は**冪等**＝二重投稿リスクなし。Threads publish 層（write-ahead `publishing`→`posted`）は `with_retry` の外で不介入。
+- **検証**: `test_logic.py` に TEST 7〜11 追加（502再試行で成功 / 404即送出 / 試行使い切りで送出 / network例外も再試行 / ValueError等は再試行しない）。全11テスト PASS ＋ 実シート DRY_RUN 成功。`threads-code-reviewer` レビュー通過（major=network例外取りこぼしを修正済み）。
+- **既知の据え置き（minor, 現運用規模で実害小）**: ①広域障害時は各呼び出しが最大30秒粘り run 全体が伸び得る（ただし最初の呼び出しで早期 fail するため限定的）。②429 は `Retry-After` を尊重せず固定バックオフ（将来アカウント/投稿数が増えたら検討）。
