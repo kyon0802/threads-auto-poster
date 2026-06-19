@@ -148,7 +148,17 @@ class Publisher:
             if status not in ("", "queued"):
                 return False
             dt = _parse_dt(p.get("post_datetime"), self.tz)
-            return dt is not None and dt <= now
+            if dt is None or dt > now:
+                return False
+            # ここまで来た＝公開時刻が到来した未投稿の行。row_id が無ければ公開しない。
+            # row_id は書き戻し（status/posted_id）と冪等性のキーで、空のまま公開すると
+            # 書き戻しが正しい行に着地せず二重投稿の原因になる。
+            # （未記入の空行は上の時刻判定で先に除外されるので、ここで警告が乱発しない。）
+            if not str(p.get("row_id") or "").strip():
+                logger.warning("公開時刻が到来した行に投稿IDが無いため公開しません（冪等性保護）: text=%r",
+                               (p.get("text") or "")[:30])
+                return False
+            return True
 
         due = self._order_parents_first(
             sorted(
@@ -165,7 +175,7 @@ class Publisher:
             account = p["account"]
             acc = accounts.get(account)
             if not acc:
-                self._mark_error(row_id, f"未登録アカウント: {account}")
+                self._mark_error(row_id, f"未登録アカウント: {account}", account=account)
                 results["error"] += 1
                 continue
 
@@ -204,7 +214,7 @@ class Publisher:
                     # 二重投稿防止(write-ahead): API実行前にシート上で行を publishing で確保する。
                     # 公開後に必ず posted へ更新する。途中でプロセスが落ちた場合は publishing が残り、
                     # is_due の対象外になるため再投稿されない（復旧は手動で status を空に戻す）。
-                    self.store.update_post(row_id, {"status": "publishing"})
+                    self.store.update_post(row_id, {"status": "publishing"}, account=account)
                     client = self.client_factory(user_id=acc["user_id"], access_token=acc["access_token"])
                     new_id = client.post(
                         text=p.get("text") or None,
@@ -216,7 +226,7 @@ class Publisher:
                         reply_control=p.get("reply_control") or None,
                     )
             except ThreadsAPIError as e:
-                self._mark_error(row_id, str(e))
+                self._mark_error(row_id, str(e), account=account)
                 results["error"] += 1
                 logger.error("公開失敗 row=%s: %s", row_id, e)
                 continue
@@ -229,7 +239,7 @@ class Publisher:
                     "posted_id": new_id,
                     "posted_at": now.strftime("%Y-%m-%d %H:%M:%S"),
                     "error": "",
-                })
+                }, account=account)
                 self.store.update_account(account, {
                     "daily_count": new_count,
                     "daily_count_date": today,
@@ -244,8 +254,8 @@ class Publisher:
         logger.info("実行結果: %s", results)
         return results
 
-    def _mark_error(self, row_id: str, msg: str) -> None:
-        self.store.update_post(row_id, {"status": "error", "error": msg[:300]})
+    def _mark_error(self, row_id: str, msg: str, account: str | None = None) -> None:
+        self.store.update_post(row_id, {"status": "error", "error": msg[:300]}, account=account)
 
     @staticmethod
     def _split_media_urls(raw) -> list[str]:

@@ -133,7 +133,7 @@ class Store(ABC):
     @abstractmethod
     def get_posts(self) -> list[dict]: ...
     @abstractmethod
-    def update_post(self, row_id: str, fields: dict) -> None: ...
+    def update_post(self, row_id: str, fields: dict, account: str | None = None) -> None: ...
 
 
 # ---------------- 本番: Google Sheets ----------------
@@ -218,9 +218,17 @@ class GoogleSheetStore(Store):
     def update_account(self, account: str, fields: dict) -> None:
         self._update_in(self.ws_accounts, ACCOUNTS_FIELD_ALIASES, "account", account, fields)
 
-    def update_post(self, row_id: str, fields: dict) -> None:
+    def update_post(self, row_id: str, fields: dict, account: str | None = None) -> None:
+        # 空の row_id は書き戻さない（誤って「最初の空ID行」を書き換えると冪等性が壊れるため）。
+        if not str(row_id).strip():
+            log.warning("空の投稿IDでの書き戻しを無視しました（冪等性保護）: %s", fields)
+            return
         # 投稿タブを順に探し、最初に見つかった投稿IDの行を更新する。
-        for ws, _account in self.posts_tabs:
+        # account 指定時は、アカウント別タブ（投稿_<account>）のうち一致するタブだけを対象にする
+        # （別アカウントのタブにある同一 row_id を誤って書き換えないため）。
+        for ws, tab_account in self.posts_tabs:
+            if account is not None and tab_account is not None and str(tab_account) != str(account):
+                continue
             if self._update_in(ws, POSTS_FIELD_ALIASES, "row_id", row_id, fields):
                 return
 
@@ -242,7 +250,9 @@ class MemoryStore(Store):
             if str(a["account"]) == str(account):
                 a.update(fields)
 
-    def update_post(self, row_id: str, fields: dict) -> None:
+    def update_post(self, row_id: str, fields: dict, account: str | None = None) -> None:
+        if not str(row_id).strip():
+            return  # 空キーは書き込まない（誤って別行を更新しないため）
         for p in self.posts:
-            if str(p["row_id"]) == str(row_id):
+            if str(p["row_id"]) == str(row_id) and (account is None or str(p.get("account")) == str(account)):
                 p.update(fields)

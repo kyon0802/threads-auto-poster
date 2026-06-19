@@ -278,4 +278,95 @@ assert _attempts6["n"] == 1, f"非一過性は1回で諦めるべき: {_attempts
 print("  ✓ ValueError等の非一過性例外は再試行せず即送出 OK")
 
 
+print("\n=== TEST 12: 投稿IDが空の行は公開しない（冪等性が壊れるため）===")
+FakeClient.instances = []
+acc12 = [{"account": "acc", "user_id": "1", "access_token": "t",
+          "token_updated_at": "2026-06-08 00:00:00", "daily_count": "", "daily_count_date": ""}]
+posts12 = [
+    {"row_id": "", "account": "acc", "post_datetime": "2026-06-08 09:00", "text": "IDなし",
+     "media_type": "TEXT", "media_url": "", "reply_to": "", "reply_control": "",
+     "status": "", "posted_id": "", "posted_at": "", "error": ""},
+    {"row_id": "OK1", "account": "acc", "post_datetime": "2026-06-08 09:00", "text": "IDあり",
+     "media_type": "TEXT", "media_url": "", "reply_to": "", "reply_control": "",
+     "status": "", "posted_id": "", "posted_at": "", "error": ""},
+]
+store12 = MemoryStore(acc12, posts12)
+res12 = Publisher(store12, client_factory=FakeClient, now_fn=fixed_now).run()
+p12 = {p["row_id"]: p for p in store12.get_posts()}
+assert p12[""]["status"] == "", "空row_idの行は公開してはいけない"
+assert p12["OK1"]["status"] == "posted"
+assert res12["posted"] == 1, res12
+posted_texts = [c["text"] for inst in FakeClient.instances for c in inst.calls]
+assert "IDなし" not in posted_texts, "空row_idの本文を公開してはいけない"
+print("  ✓ 空row_idの行はスキップ・公開されない OK")
+
+
+print("\n=== TEST 13: update_postは空row_idで誤って別行を書き換えない ===")
+store13 = MemoryStore([], [
+    {"row_id": "", "account": "acc", "status": "", "text": "x"},
+    {"row_id": "A", "account": "acc", "status": "", "text": "y"},
+])
+store13.update_post("", {"status": "posted"})
+assert store13.get_posts()[0]["status"] == "", "空キーで先頭行を書き換えてはいけない"
+print("  ✓ 空row_idでの書き戻しは無視 OK")
+
+
+print("\n=== TEST 14: update_postはaccount指定でタブ跨ぎ（別アカウントの同一row_id）を誤更新しない ===")
+store14 = MemoryStore([], [
+    {"row_id": "1", "account": "A", "status": "", "text": "a"},
+    {"row_id": "1", "account": "B", "status": "", "text": "b"},
+])
+store14.update_post("1", {"status": "posted"}, account="B")
+ps14 = store14.get_posts()
+assert ps14[0]["status"] == "", "別アカウントA(同一row_id)を触ってはいけない"
+assert ps14[1]["status"] == "posted", "指定アカウントBの行だけ更新されるべき"
+print("  ✓ account限定でタブ跨ぎ誤更新を防止 OK")
+
+
+print("\n=== TEST 15: GoogleSheetStore.update_post のタブ限定/None全走査/空IDガード/legacyフォールスルー ===")
+from threads_poster.sheets import GoogleSheetStore
+
+
+class _FakeWS:
+    def __init__(self, title):
+        self.title = title
+
+
+_calls = []
+def _fake_update_in(ws, aliases, key_internal, key_val, fields):
+    _calls.append(ws.title)
+    return True  # どのタブでも row_id が一致したものとして扱う
+
+
+# __init__（Google接続）を回避して posts_tabs/_update_in を差し替える。
+store15 = GoogleSheetStore.__new__(GoogleSheetStore)
+store15.posts_tabs = [(_FakeWS("投稿_takumi_kojo_navi"), "takumi_kojo_navi"),
+                      (_FakeWS("投稿_miko_yui_musubi"), "miko_yui_musubi")]
+store15._update_in = _fake_update_in
+
+# account=miko → takumiタブはスキップ、mikoタブだけ更新
+_calls.clear()
+store15.update_post("1", {"status": "posted"}, account="miko_yui_musubi")
+assert _calls == ["投稿_miko_yui_musubi"], f"miko指定なのに別タブを触った: {_calls}"
+
+# account=None → 最初のタブで一致して終了（従来挙動）
+_calls.clear()
+store15.update_post("1", {"status": "posted"}, account=None)
+assert _calls == ["投稿_takumi_kojo_navi"], f"account=Noneで全走査されていない: {_calls}"
+
+# 空row_id → どのタブも触らない
+_calls.clear()
+store15.update_post("", {"status": "posted"}, account="miko_yui_musubi")
+assert _calls == [], f"空row_idで書き戻した: {_calls}"
+
+# legacy 単一 posts タブ（tab_account=None）→ account指定でもフォールスルーして更新
+store15b = GoogleSheetStore.__new__(GoogleSheetStore)
+store15b.posts_tabs = [(_FakeWS("posts"), None)]
+store15b._update_in = _fake_update_in
+_calls.clear()
+store15b.update_post("X", {"status": "posted"}, account="anything")
+assert _calls == ["posts"], f"legacy postsタブが後方互換で通らない: {_calls}"
+print("  ✓ account限定・None全走査・空IDガード・legacyフォールスルー OK")
+
+
 print("\n========== 全テスト PASS ==========")
