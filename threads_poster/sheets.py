@@ -96,6 +96,39 @@ POSTS_FIELD_ALIASES = {
 POSTS_TAB_PREFIX = "投稿_"
 
 
+# ---- インサイト収集（Collector・Phase 1）。タブは「インサイト_<account>」「アカウント指標_<account>」 ----
+INSIGHTS_FIELD_ALIASES = {
+    "posted_id":       ["投稿後ID", "posted_id"],
+    "row_id":          ["投稿ID", "row_id"],
+    "snapshot_date":   ["取得日", "snapshot_date"],
+    "permalink":       ["permalink", "リンク"],
+    "post_datetime":   ["投稿日時", "post_datetime"],
+    "media_type":      ["メディア種類", "media_type"],
+    "text_len":        ["本文長", "text_len"],
+    "is_tree":         ["ツリー", "ツリー有無", "is_tree"],
+    "views":           ["表示回数", "views"],
+    "likes":           ["いいね", "likes"],
+    "replies":         ["返信", "replies"],
+    "reposts":         ["リポスト", "reposts"],
+    "quotes":          ["引用", "quotes"],
+    "shares":          ["シェア", "shares"],
+    "engagement_rate": ["エンゲージ率", "engagement_rate"],
+    "collected_at":    ["取得時刻", "collected_at"],
+}
+ACCOUNT_METRICS_FIELD_ALIASES = {
+    "snapshot_date":   ["取得日", "snapshot_date"],
+    "followers_count": ["フォロワー数", "followers_count"],
+    "views":           ["表示回数", "views"],
+    "likes":           ["いいね", "likes"],
+    "replies":         ["返信", "replies"],
+    "reposts":         ["リポスト", "reposts"],
+    "quotes":          ["引用", "quotes"],
+    "collected_at":    ["取得時刻", "collected_at"],
+}
+INSIGHTS_TAB_PREFIX = "インサイト_"
+ACCOUNT_METRICS_TAB_PREFIX = "アカウント指標_"
+
+
 def canonical_headers(aliases: dict) -> list[str]:
     """新規シート作成・日本語化に使う「正規（日本語）見出し」の並び。"""
     return [names[0] for names in aliases.values()]
@@ -134,6 +167,10 @@ class Store(ABC):
     def get_posts(self) -> list[dict]: ...
     @abstractmethod
     def update_post(self, row_id: str, fields: dict, account: str | None = None) -> None: ...
+    @abstractmethod
+    def upsert_insight(self, account: str, posted_id: str, snapshot_date: str, fields: dict) -> None: ...
+    @abstractmethod
+    def upsert_account_metric(self, account: str, snapshot_date: str, fields: dict) -> None: ...
 
 
 # ---------------- 本番: Google Sheets ----------------
@@ -232,12 +269,66 @@ class GoogleSheetStore(Store):
             if self._update_in(ws, POSTS_FIELD_ALIASES, "row_id", row_id, fields):
                 return
 
+    # ---- インサイト収集（Collector・Phase 1）。タブが無ければ作成し、キーで冪等 upsert ----
+    def _get_or_create_ws(self, title: str, headers: list[str]):
+        existing = {ws.title: ws for ws in with_retry(self.sh.worksheets)}
+        if title in existing:
+            ws = existing[title]
+            if not with_retry(lambda: ws.row_values(1)):  # ヘッダ未設定なら入れる
+                with_retry(lambda: self.sh.values_update(
+                    f"'{title}'!A1", params={"valueInputOption": "RAW"}, body={"values": [headers]}))
+            return ws
+        ws = with_retry(lambda: self.sh.add_worksheet(title=title, rows=2000, cols=max(20, len(headers))))
+        with_retry(lambda: self.sh.values_update(
+            f"'{title}'!A1", params={"valueInputOption": "RAW"}, body={"values": [headers]}))
+        return ws
+
+    def _upsert_row(self, title: str, aliases: dict, key_internals: list[str], key_vals: list, fields: dict) -> None:
+        """(key_internals==key_vals) の行を探して上書き、無ければ追記。全セル RAW(文字列)。"""
+        import gspread
+
+        ws = self._get_or_create_ws(title, canonical_headers(aliases))
+        header = with_retry(lambda: ws.row_values(1))
+        to_internal, to_header = header_maps(header, aliases)
+        col_index = {name: i + 1 for i, name in enumerate(header)}
+        records = with_retry(ws.get_all_records)
+        merged = dict(zip(key_internals, [str(v) for v in key_vals]))
+        merged.update(fields)
+        target = None
+        for idx, rec in enumerate(records, start=2):  # ヘッダ除く（2始まり）
+            rint = {to_internal.get(k, k): v for k, v in rec.items()}
+            if all(str(rint.get(ki, "")) == str(kv) for ki, kv in zip(key_internals, key_vals)):
+                target = idx
+                break
+        if target is not None:  # 上書き（冪等）
+            cells = [gspread.Cell(target, col_index[to_header[i]], "" if v is None else str(v))
+                     for i, v in merged.items() if i in to_header and to_header[i] in col_index]
+            if cells:
+                with_retry(lambda: ws.update_cells(cells, value_input_option="RAW"))
+        else:  # 追記
+            row = [""] * len(header)
+            for i, v in merged.items():
+                if i in to_header and to_header[i] in col_index:
+                    row[col_index[to_header[i]] - 1] = "" if v is None else str(v)
+            with_retry(lambda: ws.append_row(row, value_input_option="RAW"))
+
+    def upsert_insight(self, account: str, posted_id: str, snapshot_date: str, fields: dict) -> None:
+        self._upsert_row(f"{INSIGHTS_TAB_PREFIX}{account}", INSIGHTS_FIELD_ALIASES,
+                         ["posted_id", "snapshot_date"], [posted_id, snapshot_date], fields)
+
+    def upsert_account_metric(self, account: str, snapshot_date: str, fields: dict) -> None:
+        self._upsert_row(f"{ACCOUNT_METRICS_TAB_PREFIX}{account}", ACCOUNT_METRICS_FIELD_ALIASES,
+                         ["snapshot_date"], [snapshot_date], fields)
+
 
 # ---------------- テスト用: メモリ ----------------
 class MemoryStore(Store):
-    def __init__(self, accounts: list[dict], posts: list[dict]):
+    def __init__(self, accounts: list[dict], posts: list[dict],
+                 insights: list[dict] | None = None, account_metrics: list[dict] | None = None):
         self.accounts = accounts
         self.posts = posts
+        self.insights = insights if insights is not None else []
+        self.account_metrics = account_metrics if account_metrics is not None else []
 
     def get_accounts(self) -> list[dict]:
         return self.accounts
@@ -256,3 +347,23 @@ class MemoryStore(Store):
         for p in self.posts:
             if str(p["row_id"]) == str(row_id) and (account is None or str(p.get("account")) == str(account)):
                 p.update(fields)
+
+    def upsert_insight(self, account: str, posted_id: str, snapshot_date: str, fields: dict) -> None:
+        for r in self.insights:
+            if (str(r.get("account")) == str(account)
+                    and str(r.get("posted_id")) == str(posted_id)
+                    and str(r.get("snapshot_date")) == str(snapshot_date)):
+                r.update(fields)
+                return
+        rec = {"account": account, "posted_id": posted_id, "snapshot_date": snapshot_date}
+        rec.update(fields)
+        self.insights.append(rec)
+
+    def upsert_account_metric(self, account: str, snapshot_date: str, fields: dict) -> None:
+        for r in self.account_metrics:
+            if str(r.get("account")) == str(account) and str(r.get("snapshot_date")) == str(snapshot_date):
+                r.update(fields)
+                return
+        rec = {"account": account, "snapshot_date": snapshot_date}
+        rec.update(fields)
+        self.account_metrics.append(rec)

@@ -173,6 +173,67 @@ class ThreadsClient:
         ext = url.lower().split("?")[0].rsplit(".", 1)[-1]
         return ext in ("mp4", "mov", "m4v")
 
+    # ---------- 読み取り（インサイト収集 / Collector 用・状態を持たない） ----------
+    def list_media(self, limit: int = 100, fields: str | None = None, max_pages: int = 25) -> list[dict]:
+        """自分の投稿一覧を取得（カーソルページング対応）。要 threads_basic。
+        返り値: [{id, permalink, timestamp, media_type, text, ...}, ...]"""
+        fields = fields or "id,permalink,timestamp,media_type,media_product_type,text,is_quote_post"
+        url = f"{GRAPH_BASE}/{API_VERSION}/{self.user_id}/threads"
+        params: dict | None = {"fields": fields, "limit": limit, "access_token": self.access_token}
+        out: list[dict] = []
+        for _ in range(max_pages):
+            resp = requests.get(url, params=params, timeout=self.timeout)
+            data = self._json(resp)
+            out.extend(data.get("data", []))
+            nxt = (data.get("paging") or {}).get("next")
+            if not nxt:
+                break
+            url, params = nxt, None  # next は token/cursor 込みの完全URL
+        return out
+
+    def get_media_insights(self, media_id: str, metrics: list[str] | None = None) -> dict:
+        """投稿別インサイトを取得。要 threads_basic + threads_manage_insights。
+        返り値: {metric名: 値}（返ってこない metric は欠落＝呼び出し側で 0/空 扱い）。"""
+        metrics = metrics or ["views", "likes", "replies", "reposts", "quotes", "shares"]
+        url = f"{GRAPH_BASE}/{API_VERSION}/{media_id}/insights"
+        params = {"metric": ",".join(metrics), "access_token": self.access_token}
+        resp = requests.get(url, params=params, timeout=self.timeout)
+        return self._parse_insight_values(self._json(resp))
+
+    def get_user_insights(self, metrics: list[str] | None = None,
+                          since: int | None = None, until: int | None = None) -> dict:
+        """アカウント全体インサイトを取得。要 threads_basic + threads_manage_insights。
+        返り値: {metric名: 値}。views は時系列(最新値)、その他は累積 total_value。"""
+        metrics = metrics or ["views", "likes", "replies", "reposts", "quotes", "followers_count"]
+        url = f"{GRAPH_BASE}/{API_VERSION}/{self.user_id}/threads_insights"
+        params = {"metric": ",".join(metrics), "access_token": self.access_token}
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
+        resp = requests.get(url, params=params, timeout=self.timeout)
+        return self._parse_insight_values(self._json(resp))
+
+    @staticmethod
+    def _parse_insight_values(data: dict) -> dict:
+        """Insights レスポンス(data[])を {metric名: 値} に正規化。
+        - total_value 型（likes/replies/... の累積）→ total_value.value
+        - 時系列型（views 等の values[]）→ 最新の values[-1].value
+        data[] の並び順は保証されないため name キーで参照する。"""
+        out: dict = {}
+        for item in data.get("data", []):
+            name = item.get("name")
+            if not name:
+                continue
+            tv = item.get("total_value")
+            if isinstance(tv, dict) and "value" in tv:
+                out[name] = tv["value"]
+                continue
+            vals = item.get("values") or []
+            if vals:
+                out[name] = vals[-1].get("value")
+        return out
+
     # ---------- トークン ----------
     @staticmethod
     def refresh_long_lived_token(access_token: str, timeout: int = 30) -> dict:

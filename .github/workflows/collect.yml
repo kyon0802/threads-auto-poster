@@ -1,0 +1,36 @@
+name: threads-insights-collect
+
+on:
+  schedule:
+    # 毎日1回。UTC 19:00 = JST 翌04:00。投稿の10分cron(post.yml)とは別系統・別concurrency。
+    - cron: "0 19 * * *"
+  workflow_dispatch: {}   # 手動実行ボタンも有効化
+
+concurrency:
+  group: threads-insights-collect   # 投稿(threads-auto-post)とは別グループ＝投稿を一切邪魔しない
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run collector (読み取り専用・投稿しない)
+        env:
+          # 投稿系と同じ多事業ルーティング（事業→スプレッドシートID は Secret）。
+          BUSINESSES: ${{ secrets.BUSINESSES }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          TZ_NAME: Asia/Tokyo
+          # 何日前までの投稿を収集対象にするか（リポジトリ Variable で調整可・未設定なら60）。
+          LOOKBACK_DAYS: ${{ vars.LOOKBACK_DAYS || '60' }}
+        run: python main_collect.py
