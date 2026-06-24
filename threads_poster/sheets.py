@@ -128,6 +128,12 @@ ACCOUNT_METRICS_FIELD_ALIASES = {
 INSIGHTS_TAB_PREFIX = "インサイト_"
 ACCOUNT_METRICS_TAB_PREFIX = "アカウント指標_"
 
+# ---- Phase 2（分析・レポート・生成）のタブ ----
+INSIGHTS_ANALYSIS_TAB_PREFIX = "インサイト分析_"   # 週次集計（システム書込）
+PROFILE_TAB_PREFIX = "プロフィール_"               # 声/テーマ/お手本/NG（人が curation）
+GUIDELINE_TAB = "ガイドライン"                      # 規約/法令/NGワード（事業共通・人が curation）
+WEEKLY_REPORT_TAB = "週次レポート"                   # 週次サマリ（システム追記）
+
 
 def canonical_headers(aliases: dict) -> list[str]:
     """新規シート作成・日本語化に使う「正規（日本語）見出し」の並び。"""
@@ -370,6 +376,61 @@ class GoogleSheetStore(Store):
         self._upsert_row(f"{ACCOUNT_METRICS_TAB_PREFIX}{account}", ACCOUNT_METRICS_FIELD_ALIASES,
                          ["snapshot_date"], [snapshot_date], fields)
 
+    # ---- Phase 2（分析/レポート/生成）の読み書き ----
+    def _read_tab_raw(self, title: str) -> list[dict]:
+        existing = {w.title: w for w in with_retry(self.sh.worksheets)}
+        ws = existing.get(title)
+        if ws is None:
+            return []
+        return with_retry(ws.get_all_records)
+
+    def get_insights(self, account: str) -> list[dict]:
+        recs = self._read_tab_raw(f"{INSIGHTS_TAB_PREFIX}{account}")
+        if not recs:
+            return []
+        to_internal, _ = header_maps(list(recs[0].keys()), INSIGHTS_FIELD_ALIASES)
+        return [{to_internal.get(k, k): v for k, v in r.items()} for r in recs]
+
+    def get_profile(self, account: str) -> dict:
+        """プロフィール_<acc>（項目/内容）を {項目: 内容} で返す。"""
+        return {str(r.get("項目")): str(r.get("内容"))
+                for r in self._read_tab_raw(f"{PROFILE_TAB_PREFIX}{account}") if r.get("項目")}
+
+    def get_guideline(self) -> list[dict]:
+        """ガイドライン（分類/ルール/重大度）を行のリストで返す。"""
+        return [{"分類": str(r.get("分類", "")), "ルール": str(r.get("ルール", "")),
+                 "重大度": str(r.get("重大度", ""))}
+                for r in self._read_tab_raw(GUIDELINE_TAB) if r.get("ルール")]
+
+    def write_analysis(self, account: str, header: list[str], rows: list[list]) -> None:
+        title = f"{INSIGHTS_ANALYSIS_TAB_PREFIX}{account}"
+        ws = self._get_or_create_ws(title, header)
+        with_retry(ws.clear)
+        body = [header] + [["" if c is None else str(c) for c in r] for r in rows]
+        with_retry(lambda: self.sh.values_update(f"'{title}'!A1",
+                   params={"valueInputOption": "RAW"}, body={"values": body}))
+
+    def append_report(self, header: list[str], row: list) -> None:
+        ws = self._get_or_create_ws(WEEKLY_REPORT_TAB, header)
+        with_retry(lambda: ws.append_row(["" if c is None else str(c) for c in row],
+                                         value_input_option="RAW"))
+
+    def add_post(self, account: str, fields: dict) -> None:
+        """生成投稿を 投稿_<account> タブへ追記（generator 用）。fields は内部キー。"""
+        title = f"{POSTS_TAB_PREFIX}{account}"
+        existing = {w.title: w for w in with_retry(self.sh.worksheets)}
+        ws = existing.get(title)
+        if ws is None:
+            raise RuntimeError(f"投稿タブ '{title}' がありません")
+        header = with_retry(lambda: ws.row_values(1))
+        _, to_header = header_maps(header, POSTS_FIELD_ALIASES)
+        col_index = {name: i + 1 for i, name in enumerate(header)}
+        row = [""] * len(header)
+        for internal, v in fields.items():
+            if internal in to_header and to_header[internal] in col_index:
+                row[col_index[to_header[internal]] - 1] = "" if v is None else str(v)
+        with_retry(lambda: ws.append_row(row, value_input_option="RAW"))
+
 
 # ---------------- テスト用: メモリ ----------------
 class MemoryStore(Store):
@@ -423,3 +484,28 @@ class MemoryStore(Store):
         rec = {"account": account, "snapshot_date": snapshot_date}
         rec.update(fields)
         self.account_metrics.append(rec)
+
+    # ---- Phase 2（テスト用）----
+    def get_insights(self, account: str) -> list[dict]:
+        return [r for r in self.insights if str(r.get("account")) == str(account)]
+
+    def get_profile(self, account: str) -> dict:
+        return getattr(self, "profiles", {}).get(account, {})
+
+    def get_guideline(self) -> list[dict]:
+        return getattr(self, "guideline", [])
+
+    def write_analysis(self, account: str, header: list[str], rows: list[list]) -> None:
+        if not hasattr(self, "analyses"):
+            self.analyses = {}
+        self.analyses[account] = {"header": header, "rows": rows}
+
+    def append_report(self, header: list[str], row: list) -> None:
+        if not hasattr(self, "reports"):
+            self.reports = []
+        self.reports.append(row)
+
+    def add_post(self, account: str, fields: dict) -> None:
+        rec = dict(fields)
+        rec["account"] = account
+        self.posts.append(rec)

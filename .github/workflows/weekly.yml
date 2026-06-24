@@ -1,0 +1,38 @@
+name: threads-weekly-report
+
+on:
+  schedule:
+    # 毎週月曜 06:00 JST（= 日曜 21:00 UTC）。分析→週次レポート→（任意で）翌週コンテンツ生成。
+    - cron: "0 21 * * 0"
+  workflow_dispatch: {}
+
+concurrency:
+  group: threads-weekly   # 投稿/収集とは別系統
+  cancel-in-progress: false
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install -r requirements.txt anthropic
+
+      - name: Run weekly (分析→レポート→任意で生成)
+        env:
+          BUSINESSES: ${{ secrets.BUSINESSES }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          TZ_NAME: Asia/Tokyo
+          # 生成は既定オフ。ANTHROPIC_API_KEY を Secret 登録し、Variable GENERATE_POSTS=1 で有効化。
+          GENERATE_POSTS: ${{ vars.GENERATE_POSTS || '0' }}
+          GEN_POSTS_PER_ACCOUNT: ${{ vars.GEN_POSTS_PER_ACCOUNT || '5' }}
+          GEN_MODEL: ${{ vars.GEN_MODEL || 'claude-opus-4-8' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python main_weekly.py
