@@ -43,7 +43,8 @@ jobs:
         run: python main_weekly.py
 
       - name: 公開前通知メール（HTMLレポート＋今週の投稿）
-        if: ${{ secrets.MAIL_PASSWORD != '' }}
+        # メールを使うときだけ Variable ENABLE_EMAIL=1 を設定（secrets は if: で使えないため vars で制御）
+        if: ${{ vars.ENABLE_EMAIL == '1' }}
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
