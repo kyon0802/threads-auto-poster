@@ -107,6 +107,7 @@ class Collector:
                 results["errors"] += 1
                 logger.error("%s 投稿一覧の取得失敗: %s", account, e)
                 continue
+            insight_rows = []
             for m in media:
                 mid = str(m.get("id") or "").strip()
                 if not mid:
@@ -125,7 +126,8 @@ class Collector:
                 engage = sum(_to_int(ins.get(k)) for k in ENGAGE_METRICS)
                 er = round(engage / views, 4) if views else ""  # 表示0/欠落時は空（誤誘導を避ける）
                 p = posts_by_pid.get(mid, {})
-                fields = {
+                insight_rows.append({
+                    "posted_id": mid,
                     "row_id": p.get("row_id", ""),
                     "permalink": m.get("permalink", ""),
                     "post_datetime": ts.strftime("%Y-%m-%d %H:%M") if ts else (m.get("timestamp") or ""),
@@ -140,12 +142,13 @@ class Collector:
                     "shares": ins.get("shares", ""),
                     "engagement_rate": er,
                     "collected_at": collected_at,
-                }
-                if self.dry_run:
-                    logger.info("[dry-run] インサイト %s media=%s views=%s engage=%s", account, mid, views, engage)
-                else:
-                    self.store.upsert_insight(account, mid, snap, fields)
+                })
                 results["media"] += 1
+            # タブを1回だけ読んで一括 update/append（Sheets API の read/write 上限対策）
+            if insight_rows and not self.dry_run:
+                self.store.upsert_insights_bulk(account, snap, insight_rows)
+            elif insight_rows:
+                logger.info("[dry-run] %s: インサイト %d件（書込なし）", account, len(insight_rows))
 
         logger.info("収集結果: %s", results)
         return results

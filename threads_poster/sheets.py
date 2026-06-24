@@ -170,6 +170,8 @@ class Store(ABC):
     @abstractmethod
     def upsert_insight(self, account: str, posted_id: str, snapshot_date: str, fields: dict) -> None: ...
     @abstractmethod
+    def upsert_insights_bulk(self, account: str, snapshot_date: str, rows: list[dict]) -> None: ...
+    @abstractmethod
     def upsert_account_metric(self, account: str, snapshot_date: str, fields: dict) -> None: ...
 
 
@@ -322,6 +324,48 @@ class GoogleSheetStore(Store):
         self._upsert_row(f"{INSIGHTS_TAB_PREFIX}{account}", INSIGHTS_FIELD_ALIASES,
                          ["posted_id", "snapshot_date"], [posted_id, snapshot_date], fields)
 
+    def upsert_insights_bulk(self, account: str, snapshot_date: str, rows: list[dict]) -> None:
+        """インサイトタブを**1回だけ読み**、(posted_id, snapshot_date) で update/append を
+        それぞれ1回のAPIにまとめる。投稿ごとに読み書きするとSheetsのレート上限(429)に当たるため。"""
+        if not rows:
+            return
+        import gspread
+
+        title = f"{INSIGHTS_TAB_PREFIX}{account}"
+        aliases = INSIGHTS_FIELD_ALIASES
+        ws = self._get_or_create_ws(title, canonical_headers(aliases))
+        header = with_retry(lambda: ws.row_values(1))
+        to_internal, to_header = header_maps(header, aliases)
+        col_index = {name: i + 1 for i, name in enumerate(header)}
+        existing = with_retry(ws.get_all_records)  # ← タブ全体の読み込みは run中1回だけ
+        idx = {}
+        for i, rec in enumerate(existing, start=2):
+            rint = {to_internal.get(k, k): v for k, v in rec.items()}
+            idx[(str(rint.get("posted_id", "")), str(rint.get("snapshot_date", "")))] = i
+        next_row = len(existing) + 2
+        cells, appends = [], []
+        for r in rows:
+            full = dict(r)
+            full["snapshot_date"] = snapshot_date
+            key = (str(full.get("posted_id", "")), str(snapshot_date))
+            rownum = idx.get(key)
+            if rownum:  # 既存行を上書き（冪等）
+                for internal, v in full.items():
+                    if internal in to_header and to_header[internal] in col_index:
+                        cells.append(gspread.Cell(rownum, col_index[to_header[internal]], "" if v is None else str(v)))
+            else:  # 新規行
+                vals = [""] * len(header)
+                for internal, v in full.items():
+                    if internal in to_header and to_header[internal] in col_index:
+                        vals[col_index[to_header[internal]] - 1] = "" if v is None else str(v)
+                appends.append(vals)
+                idx[key] = next_row
+                next_row += 1
+        if cells:  # 上書き分をまとめて1回
+            with_retry(lambda: ws.update_cells(cells, value_input_option="RAW"))
+        if appends:  # 追記分をまとめて1回
+            with_retry(lambda: ws.append_rows(appends, value_input_option="RAW"))
+
     def upsert_account_metric(self, account: str, snapshot_date: str, fields: dict) -> None:
         self._upsert_row(f"{ACCOUNT_METRICS_TAB_PREFIX}{account}", ACCOUNT_METRICS_FIELD_ALIASES,
                          ["snapshot_date"], [snapshot_date], fields)
@@ -364,6 +408,12 @@ class MemoryStore(Store):
         rec = {"account": account, "posted_id": posted_id, "snapshot_date": snapshot_date}
         rec.update(fields)
         self.insights.append(rec)
+
+    def upsert_insights_bulk(self, account: str, snapshot_date: str, rows: list[dict]) -> None:
+        for r in rows:
+            pid = r.get("posted_id")
+            self.upsert_insight(account, pid, snapshot_date,
+                                {k: v for k, v in r.items() if k != "posted_id"})
 
     def upsert_account_metric(self, account: str, snapshot_date: str, fields: dict) -> None:
         for r in self.account_metrics:
