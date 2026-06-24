@@ -26,6 +26,10 @@ jobs:
 
       - name: Run publisher
         env:
+          # 多事業ルーティング: 事業→スプレッドシートID の JSON 配列（値は Secret に保存・公開しない）。
+          # 設定時は main.py が事業ごとにループ。未設定なら下の SPREADSHEET_ID 単体に
+          # フォールバック（後方互換・即ロールバック用）。
+          BUSINESSES: ${{ secrets.BUSINESSES }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           TZ_NAME: Asia/Tokyo

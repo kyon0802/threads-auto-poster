@@ -23,24 +23,59 @@ logging.basicConfig(
 log = logging.getLogger("main")
 
 
+def resolve_business_sheets(env) -> list[tuple[str, str]]:
+    """処理対象の (事業名, スプレッドシートID) のリストを返す。
+
+    - 多事業: 環境変数 BUSINESSES の JSON 配列
+      例 [{"name":"seizogyo","spreadsheet_id":"..."},{"name":"uranai","spreadsheet_id":"..."}]
+    - 単一(後方互換): BUSINESSES が無ければ SPREADSHEET_ID 単体
+      （事業名は BUSINESS_NAME・既定 "default"）。
+    どちらも無ければ空リスト（呼び出し側でエラー）。
+    """
+    raw = env.get("BUSINESSES")
+    if raw and raw.strip():
+        sheets = []
+        for b in json.loads(raw):
+            sid = b.get("spreadsheet_id") or b.get("id")
+            if sid:
+                sheets.append((b.get("name", "(no-name)"), sid))
+        return sheets
+    sid = env.get("SPREADSHEET_ID")
+    if sid:
+        return [(env.get("BUSINESS_NAME", "default"), sid)]
+    return []
+
+
 def main() -> int:
     sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-    spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     tz_name = os.environ.get("TZ_NAME", "Asia/Tokyo")
     max_per_day = int(os.environ.get("MAX_POSTS_PER_DAY", "50"))
     tree_delay = int(os.environ.get("TREE_REPLY_DELAY_SEC", "30"))
     dry_run = os.environ.get("DRY_RUN") == "1"
+    sheets = resolve_business_sheets(os.environ)
 
-    if not sa_json or not spreadsheet_id:
-        log.error("GOOGLE_SERVICE_ACCOUNT_JSON と SPREADSHEET_ID が必要です")
+    if not sa_json or not sheets:
+        log.error("GOOGLE_SERVICE_ACCOUNT_JSON と (BUSINESSES または SPREADSHEET_ID) が必要です")
         return 1
 
-    store = GoogleSheetStore(json.loads(sa_json), spreadsheet_id)
-    pub = Publisher(store, tz_name=tz_name, max_posts_per_day=max_per_day,
-                    tree_reply_delay_sec=tree_delay, dry_run=dry_run)
-    res = pub.run()
-    log.info("完了: %s", res)
-    return 0 if res["error"] == 0 else 2
+    sa_info = json.loads(sa_json)
+    totals = {"posted": 0, "skipped": 0, "error": 0, "deferred": 0}
+    failures = 0
+    for name, sid in sheets:
+        log.info("=== 事業 '%s' を処理 (sheet=%s…) ===", name, str(sid)[:10])
+        try:
+            store = GoogleSheetStore(sa_info, sid)
+            pub = Publisher(store, tz_name=tz_name, max_posts_per_day=max_per_day,
+                            tree_reply_delay_sec=tree_delay, dry_run=dry_run)
+            res = pub.run()
+            for k in totals:
+                totals[k] += res.get(k, 0)
+        except Exception as e:  # 1事業の失敗で他事業を止めない（run全体は失敗扱い→通知）
+            failures += 1
+            log.exception("事業 '%s' の処理に失敗: %s", name, e)
+
+    log.info("完了(全事業合算): %s / 事業レベル失敗=%d", totals, failures)
+    return 0 if (totals["error"] == 0 and failures == 0) else 2
 
 
 if __name__ == "__main__":
