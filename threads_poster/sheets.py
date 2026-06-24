@@ -271,16 +271,22 @@ class GoogleSheetStore(Store):
 
     # ---- インサイト収集（Collector・Phase 1）。タブが無ければ作成し、キーで冪等 upsert ----
     def _get_or_create_ws(self, title: str, headers: list[str]):
+        cache = getattr(self, "_ins_ws_cache", None)
+        if cache is None:
+            cache = self._ins_ws_cache = {}
+        if title in cache:  # 同一run内で worksheets() を繰り返さない（API呼び出し節約）
+            return cache[title]
         existing = {ws.title: ws for ws in with_retry(self.sh.worksheets)}
         if title in existing:
             ws = existing[title]
             if not with_retry(lambda: ws.row_values(1)):  # ヘッダ未設定なら入れる
                 with_retry(lambda: self.sh.values_update(
                     f"'{title}'!A1", params={"valueInputOption": "RAW"}, body={"values": [headers]}))
-            return ws
-        ws = with_retry(lambda: self.sh.add_worksheet(title=title, rows=2000, cols=max(20, len(headers))))
-        with_retry(lambda: self.sh.values_update(
-            f"'{title}'!A1", params={"valueInputOption": "RAW"}, body={"values": [headers]}))
+        else:
+            ws = with_retry(lambda: self.sh.add_worksheet(title=title, rows=2000, cols=max(20, len(headers))))
+            with_retry(lambda: self.sh.values_update(
+                f"'{title}'!A1", params={"valueInputOption": "RAW"}, body={"values": [headers]}))
+        cache[title] = ws
         return ws
 
     def _upsert_row(self, title: str, aliases: dict, key_internals: list[str], key_vals: list, fields: dict) -> None:

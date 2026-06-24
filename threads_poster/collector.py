@@ -56,10 +56,9 @@ class Collector:
         self.lookback_days = lookback_days
         self.media_metrics = list(media_metrics) if media_metrics else \
             ["views", "likes", "replies", "reposts", "quotes", "shares"]
-        # アカウント全体の views は since/until 必須の可能性があり初回で全体失敗を招きうるので
-        # 既定から外す（累積 total_value 型の安定指標のみ）。実機確認後に env/引数で追加可。
+        # アカウント全体指標。views は since/until 無しでも返ることを実機確認済み(2026-06-24)。
         self.user_metrics = list(user_metrics) if user_metrics else \
-            ["likes", "replies", "reposts", "quotes", "followers_count"]
+            ["views", "likes", "replies", "reposts", "quotes", "followers_count"]
 
     def run(self) -> dict:
         now = self.now_fn()
