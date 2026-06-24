@@ -290,3 +290,15 @@ curation（ローカル知識→シート）は手作業なので、放置する
 4. **機械コンプラゲート（二重の安全網）**：生成後も `ガイドライン` を参照して違反を遮断（合格分のみ queued）。
 - （任意）ドリフト検知：ローカル元ファイルが更新されたのにタブが未更新なら警告。
 - ゲートは「タブの存在/非空」を保証、レジストリ＋ユーザーレビューが「中身の網羅」を保証する役割分担。
+
+---
+
+## 18. 改修ログ（2026-06-24）事業分離（Phase 0）＝事業ごとに非公開シートを分割
+
+PRD #2 の Phase 0 を実施。**「全事業が1シートに同居」→「事業ごとに独立した非公開シート」**へ移管し、エンジンを多事業対応にした（投稿は止めずに切替）。
+
+- **事業別シート**：製造業（`takumi_kojo_navi`）／占い（`miko_yui_musubi`）をそれぞれ独立した**非公開**スプレッドシートに分離。各シートは `accounts` ＋ `投稿_<acc>` を持つ（将来 `インサイト_<acc>` 等の収集タブもこの事業シートに足す）。**シートIDは公開repoに書かない**＝GitHub Secret `BUSINESSES` で管理（§17b 準拠）。
+- **多事業ルーティング（コードは1つのまま）**：`main.py` に `resolve_business_sheets(env)` を追加。環境変数 `BUSINESSES`（JSON配列 `[{"name","spreadsheet_id"}, …]`）があれば**事業ごとに `GoogleSheetStore`＋`Publisher` をループ**。無ければ従来の `SPREADSHEET_ID` 単体に**フォールバック**（後方互換・即ロールバック）。1事業が失敗しても他事業は止めず、run 全体は失敗扱い（exit 2 ＝失敗通知は維持）。`Publisher` 本体は無変更＝既存テストの保証をそのまま維持。
+- **移管ツール**：`scripts/migrate_to_business_sheet.py --src <旧ID> --dst <新ID> --account <acc>`。`accounts` 行（トークン・日次カウント込み）＋ `投稿_<acc>` 全行を **verbatim ミラー**（`posted`/`投稿後ID`/`状態` を含む＝**二重投稿防止の生命線**）。**全セル RAW(文字列)書込**で17桁の user_id / 投稿後ID やトークンの**桁落ちを防止**。**冪等**（再実行で旧シートの最新状態を全置換ミラー）。
+- **安全な切替手順（実施済み）**：①cron停止（`gh workflow disable post.yml`）②in-flight 無しを確認→移管スクリプト**再実行**で旧シートの最終状態を再同期（切替直前に公開された投稿との race を消す）③Secret `BUSINESSES` 登録＋`post.yml` の env に `BUSINESSES` 追加→push ④`workflow_dispatch` で1回実行し**両事業 error0** を確認 ⑤cron再開（`gh workflow enable`）。**旧シート＋旧Secret `SPREADSHEET_ID` は温存**（post.yml を戻すだけで即ロールバック）。
+- **次段（Phase 1）への接続**：トークンを各事業シートの `accounts` に持つ構成は不変。収集（collector）は事業シートに `インサイト_<acc>` 等を足し、新設 `collect.yml` が**同じ `BUSINESSES` ルーティング**で事業をループする（投稿cronとは別系統・読取専用）。
