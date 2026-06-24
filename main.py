@@ -54,6 +54,11 @@ def main() -> int:
     dry_run = os.environ.get("DRY_RUN") == "1"
     sheets = resolve_business_sheets(os.environ)
 
+    # キルスイッチ: Variable/Secret PAUSED=1 で投稿を即停止（生成・公開を含む全自動を止める）
+    if os.environ.get("PAUSED") == "1":
+        log.info("PAUSED=1：一時停止中のため投稿しません（キルスイッチ）")
+        return 0
+
     if not sa_json or not sheets:
         log.error("GOOGLE_SERVICE_ACCOUNT_JSON と (BUSINESSES または SPREADSHEET_ID) が必要です")
         return 1

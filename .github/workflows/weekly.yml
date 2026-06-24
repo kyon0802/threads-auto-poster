@@ -32,7 +32,27 @@ jobs:
           TZ_NAME: Asia/Tokyo
           # 生成は既定オフ。ANTHROPIC_API_KEY を Secret 登録し、Variable GENERATE_POSTS=1 で有効化。
           GENERATE_POSTS: ${{ vars.GENERATE_POSTS || '0' }}
+          # GEN_STATUS=draft(人が確認) / queued(完全全自動で公開)。安全のため既定 draft。
+          GEN_STATUS: ${{ vars.GEN_STATUS || 'draft' }}
           GEN_POSTS_PER_ACCOUNT: ${{ vars.GEN_POSTS_PER_ACCOUNT || '5' }}
           GEN_MODEL: ${{ vars.GEN_MODEL || 'claude-opus-4-8' }}
+          # キルスイッチ: Variable PAUSED=1 で生成・投稿を即停止。
+          PAUSED: ${{ vars.PAUSED || '0' }}
+          REPORTS_DIR: reports
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python main_weekly.py
+
+      - name: 公開前通知メール（HTMLレポート＋今週の投稿）
+        if: ${{ secrets.MAIL_PASSWORD != '' }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          from: Threads週次レポート <${{ secrets.MAIL_USERNAME }}>
+          to: morll.0802@gmail.com
+          subject: "【Threads週次】分析レポート＋今週の自動投稿"
+          html_body: file://reports/メール本文.html
+          attachments: reports/*.html

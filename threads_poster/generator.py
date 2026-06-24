@@ -25,8 +25,8 @@ class GeneratorError(Exception):
     pass
 
 
-def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: dict, n: int) -> str:
-    prof = "\n".join(f"- {k}: {v}" for k, v in profile.items())
+def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: dict, n: int,
+                 knowledge: str = "") -> str:
     guide = "\n".join(f"- [{g.get('重大度')}] {g.get('分類')}: {g.get('ルール')}" for g in guideline)
     wins = []
     for axis, key in [("時間帯", "by_time"), ("本文長", "by_length"), ("ツリー有無", "by_tree")]:
@@ -34,17 +34,25 @@ def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: d
         best = max(cand, key=lambda t: (t[3] if isinstance(t[3], (int, float)) else -1), default=None)
         if best:
             wins.append(f"{axis}は「{best[0]}」が好調")
+    # 知識源：ナレッジ全文（最優先・濃い）があればそれを、無ければプロフィールを使う
+    if knowledge.strip():
+        know_section = ("## 事業ナレッジ（最重要・このアカウントの全知識。声・戦略・合法ライン・"
+                        "勝ち筋・フック型・KGI/CVRを含む。これを土台に作る）\n" + knowledge.strip())
+    else:
+        prof = "\n".join(f"- {k}: {v}" for k, v in profile.items())
+        know_section = "## プロフィール\n" + prof
     return (
         f"あなたはThreadsアカウント「{account}」の専属コンテンツ戦略担当です。\n"
-        f"下記のプロフィール（声・テーマ・お手本）とガイドライン（規約・法令・NG）を**厳守**し、\n"
-        f"実績の勝ちパターンを踏まえて、エンゲージが伸びる翌週の投稿案を{n}本作成してください。\n\n"
-        f"## プロフィール\n{prof}\n\n"
+        f"下記の事業ナレッジとガイドライン（規約・法令・NG）を**厳守**し、\n"
+        f"実績の勝ちパターンを踏まえて、エンゲージ（最終的には送客/成立=CVR）が伸びる"
+        f"翌週の投稿案を{n}本作成してください。\n\n"
+        f"{know_section}\n\n"
         f"## ガイドライン（厳守・違反した投稿は機械的に破棄される）\n{guide}\n\n"
         f"## 実績の勝ちパターン\n" + ("／".join(wins) if wins else "（データ蓄積中・お手本の型を踏襲）") + "\n\n"
         f"## 出力要件\n"
         f"- 各投稿は独立した完成本文（そのまま投稿できる形）\n"
         f"- NGワードは絶対に使わない／本文に外部URLを書かない（誘導はプロフィール動線）\n"
-        f"- 1投稿500字以内・プロフィールの声とお手本の型を踏襲\n"
+        f"- 1投稿500字以内・ナレッジの声と勝ち筋・フック型を踏襲\n"
     )
 
 
@@ -65,15 +73,17 @@ class Generator:
     def run(self, analysis: dict, candidates: list[str] | None = None) -> dict:
         profile = self.store.get_profile(self.account)
         guideline = self.store.get_guideline()
-        # ★必須タブ存在ゲート（§17e）：空/欠落なら loud fail（盲目生成しない）
-        if not profile or not guideline:
+        knowledge = self.store.get_knowledge(self.account)
+        # ★必須タブ存在ゲート（§17e）：ガイドライン(NG語)必須 ＋ ナレッジ or プロフィール のどちらか。
+        # 空/欠落なら loud fail（盲目生成しない）。
+        if not guideline or not (knowledge.strip() or profile):
             raise GeneratorError(
-                f"{self.account}: プロフィール/ガイドライン未整備のため生成中止"
-                f"（profile={len(profile)}項目 / guideline={len(guideline)}行）")
+                f"{self.account}: ナレッジ/プロフィール or ガイドライン未整備のため生成中止"
+                f"（knowledge={len(knowledge)}字 / profile={len(profile)}項目 / guideline={len(guideline)}行）")
         ng = extract_ng_words(guideline)
 
         if candidates is None:
-            prompt = build_prompt(self.account, profile, guideline, analysis, self.n_posts)
+            prompt = build_prompt(self.account, profile, guideline, analysis, self.n_posts, knowledge=knowledge)
             candidates = self.generate_fn(prompt)
 
         now = self.now_fn()
