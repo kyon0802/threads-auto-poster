@@ -84,6 +84,45 @@ def test_generator_pipeline():
     print("  ✓ generator パイプライン（生成→ゲート→draft投入）OK")
 
 
+def test_generator_with_schedule_fn_4_per_day():
+    """schedule_fn を渡すと 1日4本・昼1＋夜3・最低間隔30分で予約される（製造業の設定）。"""
+    import random
+    from threads_poster.schedule import build_schedule
+    store = MemoryStore([{"account": "takumi_kojo_navi"}], [])
+    store.profiles = {"takumi_kojo_navi": {"声": "現場目線"}}
+    store.guideline = [{"分類": "NGワード", "ルール": "絶対", "重大度": "高"}]
+    cands = [f"製造業の話 その{i}。" for i in range(6)]  # 6本 → 翌日4本＋翌々日2本
+    Generator(store, "takumi_kojo_navi", generate_fn=lambda p: cands, now_fn=lambda: NOW,
+              status="queued", schedule_fn=build_schedule, rng=random.Random(0)
+              ).run({}, candidates=cands)
+    assert len(store.posts) == 6, store.posts
+    from collections import Counter
+    days = Counter(p["post_datetime"].split(" ")[0] for p in store.posts)
+    assert days["2026-06-25"] == 4 and days["2026-06-26"] == 2, days  # NOW=06-24 → 翌日06-25
+    # 各時刻が方針どおり（昼11:30-12:30 ＋ 夜18:00-23:00・最低間隔30分）
+    d1 = sorted(p["post_datetime"] for p in store.posts if p["post_datetime"].startswith("2026-06-25"))
+    mins = [int(s[11:13]) * 60 + int(s[14:16]) for s in d1]
+    assert 11 * 60 + 30 <= mins[0] <= 12 * 60 + 30, mins
+    for m in mins[1:]:
+        assert 18 * 60 <= m <= 23 * 60, mins
+    for a, b in zip(mins, mins[1:]):
+        assert b - a >= 30, mins
+    print("  ✓ generator＋schedule_fn（1日4本・昼1＋夜3・最低間隔30分）OK")
+
+
+def test_generator_legacy_schedule_unchanged():
+    """schedule_fn なし＝従来どおり翌日から1日1本・21時固定（占い等は不変）。"""
+    store = MemoryStore([{"account": "miko_yui_musubi"}], [])
+    store.profiles = {"miko_yui_musubi": {"声": "巫女"}}
+    store.guideline = [{"分類": "NGワード", "ルール": "絶対", "重大度": "高"}]
+    cands = ["所感その1。", "所感その2。"]
+    Generator(store, "miko_yui_musubi", generate_fn=lambda p: cands, now_fn=lambda: NOW,
+              status="draft").run({}, candidates=cands)
+    dts = sorted(p["post_datetime"] for p in store.posts)
+    assert dts == ["2026-06-25 21:00", "2026-06-26 21:00"], dts  # 翌日から1日1本・21時
+    print("  ✓ generator 従来挙動（schedule_fn なし＝1日1本21時）維持 OK")
+
+
 def test_build_prompt_includes_guideline():
     p = build_prompt("a1", {"声": "x"}, [{"分類": "法令", "ルール": "誇大NG", "重大度": "高"}],
                      {"by_time": [("夜(18-23)", 3, 500, 0.04)]}, 3)
@@ -98,5 +137,7 @@ if __name__ == "__main__":
     test_compliance()
     test_generator_gate_missing_profile()
     test_generator_pipeline()
+    test_generator_with_schedule_fn_4_per_day()
+    test_generator_legacy_schedule_unchanged()
     test_build_prompt_includes_guideline()
     print("========== 全テスト PASS ==========")

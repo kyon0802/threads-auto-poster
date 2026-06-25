@@ -334,3 +334,20 @@ PRD #2 の Phase 2 を実装。実績→分析→レポート→AI生成→**機
 - **curation（事業ノウハウ・非公開）**：`プロフィール_<acc>`（声/テーマ/お手本/NG）と事業共通 `ガイドライン`（規約/法令/NGワード/過去BAN教訓）を**非公開シートにのみ**保持（公開repo禁止・§17）。元ネタはローカル（製造業Threads/占いThreads-note）から対話で蒸留。書込スクリプトも repo 外。
 - **テスト**：`test_phase2.py`（集計/最新スナップ/コンプラ遮断/必須タブゲート/生成パイプライン/プロンプト内包＝6 PASS）。実機デモで製造業5/5・占い4/5合格（占い1本は NGワード「結ばれる」をゲートが遮断）→ draft 投入を確認。
 - **前提（HITL・残）**：自動生成を回すには `ANTHROPIC_API_KEY` を GitHub Secret 登録＋Variable `GENERATE_POSTS=1`＋`weekly.yml` を enable。生成 draft は人がレビューして `queued` へ。
+
+---
+
+## 21. 改修ログ（2026-06-25）製造業の投稿スケジュールを「1日4本・ランダム配置」に変更
+
+**背景**：generator が翌週案を「**翌日から1日1本・21時固定**」（`generator.py` の `(now+timedelta(days=j)).replace(hour=suggest_hour)`）で並べていたため、製造業 `takumi_kojo_navi` が**毎日1投稿・毎日同じ21時**になっていた（しかも複数回 run すると同21時に重複）。ユーザー要望＝**1日4投稿・時刻はランダム**（昼12時前後に1本＋夜18:00〜23:00にランダム3本／投稿間の**最低間隔30分**・ただし30分等間隔ではなくランダム配置）。**製造業(seizogyo)のみ**。占い(uranai)は従来どおり1日1本21時で不変。
+
+- **新規 `threads_poster/schedule.py`**（純関数・乱数注入可能 `rng`）：
+  - `_random_times_with_min_gap(rng,start,end,count,gap)`＝区間内に count 個を**最低間隔gap以上でランダム配置**（昇順）。空き時間 `free=幅-(count-1)*gap` を一様乱数オフセットに分配→ソート→`i*gap` 足し戻し。**終始 整数分**で扱い丸め誤差で30分を割らない。`free<0` は `ValueError`。
+  - `daily_slots_minutes(rng,...)`＝1日分（既定 昼12:00±30分 ＋ 夜18:00-23:00に3本・最低間隔30分）→4スロット昇順。
+  - `build_schedule(n,*,start_date,tz,rng,**daily)`＝n本を**翌日から1日4本ずつ**詰めて `["YYYY-MM-DD HH:MM",…]` を返す。各日ごとに時刻を新規ランダム生成（毎日同時刻にならない）。端数日は早い順に採用。
+- **`generator.py`**：`Generator(... schedule_fn=None, rng=None)` を追加。`schedule_fn` があれば予約時刻をそれで割当（製造業＝`build_schedule`）、無ければ**従来挙動を厳密に維持**（占い等は不変）。`make_anthropic_generate_fn` の `max_tokens` を本数比例（`min(32000,max(8000,400*n))`）に＝28本でも切れない。
+- **`main_weekly.py`**：`SCHEDULE_FN_BY_BUSINESS={"seizogyo":build_schedule}` と `n_posts_for(name,env,default)` を追加。**事業ごとに本数を分離**（seizogyo＝28本＝4×7日／Variable `GEN_POSTS_SEIZOGYO` で上書き可・他事業は `GEN_POSTS_PER_ACCOUNT` 既定5）。※`GEN_POSTS_PER_ACCOUNT` は全事業共通なので、これを28にすると占いが28日先まで1本/日で並ぶ→事業別本数で回避。事業名はライブ `BUSINESSES` secret が `seizogyo`/`uranai`（weekly run ログで確認済み）。
+- **`weekly.yml`**：`GEN_POSTS_SEIZOGYO: ${{ vars.GEN_POSTS_SEIZOGYO || '28' }}` を追加。
+- **既存 queued 投稿の再配置**：旧ロジックで「毎日21時・一部重複」に並んでいた generator 投稿9件（`takumi-g…`）を、新スケジュールへ**実シートで再配置**（明日06-26から 4＋4＋1）。専用 `scripts/reschedule_posts.py`（**既定 dry-run**・`--apply` で書込・`update_post` 再利用でアカウント別タブ限定RAW・**post_datetime のみ**更新／status/posted_id/row_id/本文は不変・読み戻し検証つき）。MAX_POSTS_PER_DAY=5 のままで 4/日 ≤ 5 で安全。
+- **テスト**：新規 `test_schedule.py`（最低間隔ヘルパ/配置不能/1日スロット/**500 seed の最低間隔30分＋窓内**/固定グリッドでない/4本詰め/28本=7×4/再現性＝8 PASS）。`test_phase2.py` に generator＋schedule_fn（1日4本検証）と従来挙動維持の2件を追加（計8 PASS）。`test_logic`/`test_collect` も全PASS。
+- **過渡期メモ**：再配置9件は 06-26〜06-28(部分) をカバー。次の週次 run（月曜06-29 06:00）が翌日06-30から28本を再生成し以降は毎日4本で自走。06-29 は薄い（再配置の端数）。**製造業は過去2回BAN・現状 `GEN_STATUS=queued`（無確認自動公開）**＝物量増（28/週）に伴い凍結リスクが上がる点は要観察（必要なら `GEN_STATUS=draft` で確認運用へ）。

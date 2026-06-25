@@ -35,6 +35,8 @@ jobs:
           # GEN_STATUS=draft(人が確認) / queued(完全全自動で公開)。安全のため既定 draft。
           GEN_STATUS: ${{ vars.GEN_STATUS || 'draft' }}
           GEN_POSTS_PER_ACCOUNT: ${{ vars.GEN_POSTS_PER_ACCOUNT || '5' }}
+          # 製造業(seizogyo)のみ1日4本×7日＝28本（毎日4投稿を1週間フルカバー）。他事業は上記の既定5。
+          GEN_POSTS_SEIZOGYO: ${{ vars.GEN_POSTS_SEIZOGYO || '28' }}
           GEN_MODEL: ${{ vars.GEN_MODEL || 'claude-opus-4-8' }}
           # キルスイッチ: Variable PAUSED=1 で生成・投稿を即停止。
           PAUSED: ${{ vars.PAUSED || '0' }}

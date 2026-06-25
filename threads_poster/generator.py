@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -59,7 +60,8 @@ def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: d
 class Generator:
     def __init__(self, store, account: str, generate_fn=None, now_fn=None,
                  n_posts: int = 5, status: str = "draft", id_prefix: str | None = None,
-                 suggest_hour: int = 21, tz_name: str = "Asia/Tokyo", model: str = DEFAULT_MODEL):
+                 suggest_hour: int = 21, tz_name: str = "Asia/Tokyo", model: str = DEFAULT_MODEL,
+                 schedule_fn=None, rng=None):
         self.store = store
         self.account = account
         self.generate_fn = generate_fn or make_anthropic_generate_fn(model, n_posts)
@@ -69,6 +71,10 @@ class Generator:
         self.status = status
         self.id_prefix = id_prefix or account.split("_")[0]
         self.suggest_hour = suggest_hour
+        # 予約時刻の割り当て戦略（注入可能）。None なら従来どおり「翌日から1日1本・suggest_hour固定」。
+        # 製造業は schedule.build_schedule を渡して「1日4本・昼1＋夜3・ランダム配置」にする。
+        self.schedule_fn = schedule_fn
+        self.rng = rng or random.Random()
 
     def run(self, analysis: dict, candidates: list[str] | None = None) -> dict:
         profile = self.store.get_profile(self.account)
@@ -85,6 +91,10 @@ class Generator:
         if candidates is None:
             prompt = build_prompt(self.account, profile, guideline, analysis, self.n_posts, knowledge=knowledge)
             candidates = self.generate_fn(prompt)
+            # 想定本数より少なければ警告（max_tokens切れ等での静かな少数生成を可視化する）。
+            if len(candidates) < self.n_posts:
+                logger.warning("%s: 生成本数が想定を下回りました（要求%d / 取得%d）",
+                               self.account, self.n_posts, len(candidates))
 
         now = self.now_fn()
         date = now.strftime("%Y%m%d")
@@ -93,13 +103,24 @@ class Generator:
             ok, reasons = check_post(text, ng)
             (kept if ok else rejected).append(text if ok else {"text": text, "reasons": reasons})
 
+        # 予約時刻の割り当て。schedule_fn があればそれ（製造業＝1日4本・ランダム）、
+        # 無ければ従来どおり「翌日から1日1本・suggest_hour固定」。
+        if self.schedule_fn is not None:
+            schedule = self.schedule_fn(len(kept), start_date=now, tz=self.tz, rng=self.rng)
+        else:
+            schedule = [
+                (now + timedelta(days=j)).replace(
+                    hour=self.suggest_hour, minute=0, second=0, microsecond=0
+                ).strftime("%Y-%m-%d %H:%M")
+                for j in range(1, len(kept) + 1)
+            ]
+
         written = []
-        for j, text in enumerate(kept, 1):
+        for j, (text, post_dt) in enumerate(zip(kept, schedule), 1):
             row_id = f"{self.id_prefix}-g{date}-{j:02d}"
-            dt = (now + timedelta(days=j)).replace(hour=self.suggest_hour, minute=0, second=0, microsecond=0)
             self.store.add_post(self.account, {
                 "row_id": row_id,
-                "post_datetime": dt.strftime("%Y-%m-%d %H:%M"),
+                "post_datetime": post_dt,
                 "text": text,
                 "media_type": "TEXT",
                 "status": self.status,  # draft = 自動公開されない（人が queued に変える）
@@ -115,9 +136,12 @@ def make_anthropic_generate_fn(model: str = DEFAULT_MODEL, n: int = 5):
     def fn(prompt: str) -> list[str]:
         import anthropic
         client = anthropic.Anthropic()
+        # 本数に比例して出力上限を確保。1投稿は最大500字許容（build_prompt）なので、
+        # 28本でも切れないよう保守的に 1本=800token 見込みで確保（28本→22,400）。
+        max_tokens = min(60000, max(8000, 800 * n))
         resp = client.messages.create(
             model=model,
-            max_tokens=8000,
+            max_tokens=max_tokens,
             system="日本語で、指定のプロフィールとガイドラインに完全準拠した投稿本文のみを生成する。",
             messages=[{"role": "user", "content": prompt}],
             output_config={"format": {"type": "json_schema", "schema": {
@@ -127,6 +151,14 @@ def make_anthropic_generate_fn(model: str = DEFAULT_MODEL, n: int = 5):
                 "additionalProperties": False,
             }}},
         )
+        # max_tokens 切れ（途中で打ち切り）は JSON が壊れる/本数不足の元。明示的に検知して
+        # 分かりやすいエラーにする（裸の JSONDecodeError を generic 失敗にしない）。
+        if getattr(resp, "stop_reason", None) == "max_tokens":
+            raise GeneratorError(
+                f"生成が max_tokens({max_tokens}) で打ち切られました（n={n}）。本数を減らすか上限を上げてください。")
         text = next(b.text for b in resp.content if b.type == "text")
-        return json.loads(text).get("posts", [])
+        try:
+            return json.loads(text).get("posts", [])
+        except json.JSONDecodeError as e:
+            raise GeneratorError(f"生成結果のJSON解析に失敗（max_tokens切れの疑い・n={n}）: {e}") from e
     return fn

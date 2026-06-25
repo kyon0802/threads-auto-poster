@@ -26,7 +26,22 @@ from threads_poster.analyzer import Analyzer
 from threads_poster.reporter import Reporter
 from threads_poster.generator import Generator, GeneratorError
 from threads_poster.html_report import build_html
+from threads_poster.schedule import build_schedule
 from main import resolve_business_sheets
+
+# 事業ごとの予約時刻スケジュール戦略。
+# seizogyo（製造業 takumi_kojo_navi）＝1日4本（昼1＋夜18-23時に3本・最低間隔30分・ランダム配置）。
+# それ以外（占い等）は None＝従来どおり（generator が翌日から1日1本・21時固定で割り当て）。
+SCHEDULE_FN_BY_BUSINESS = {"seizogyo": build_schedule}
+
+
+def n_posts_for(name: str, env, default_n: int) -> int:
+    """事業ごとの1アカ生成本数。seizogyo は「1日4本×7日＝28本」を既定（毎日4投稿を1週間フルカバー）。
+    Variable GEN_POSTS_SEIZOGYO で上書き可。その他事業は GEN_POSTS_PER_ACCOUNT（既定5）。
+    ※本数を事業ごとに分けるのは、占い等は従来どおり1日1本のため28本にすると28日先まで並んでしまうのを防ぐため。"""
+    if name == "seizogyo":
+        return int(env.get("GEN_POSTS_SEIZOGYO", "28"))
+    return default_n
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 log = logging.getLogger("main_weekly")
@@ -79,8 +94,10 @@ def main() -> int:
                     f.write(build_html(acc, analysis, gen_date, theme=theme, title=acc))
                 gen_titles = []
                 if generate:
-                    res = Generator(store, acc, n_posts=n_posts, model=gen_model,
-                                    status=gen_status).run(analysis)
+                    schedule_fn = SCHEDULE_FN_BY_BUSINESS.get(name)
+                    acc_n_posts = n_posts_for(name, os.environ, n_posts)
+                    res = Generator(store, acc, n_posts=acc_n_posts, model=gen_model,
+                                    status=gen_status, schedule_fn=schedule_fn).run(analysis)
                     totals["generated_drafts"] += len(res["written"])
                     gen_titles = [t.splitlines()[0][:38] for t in res["kept"]]
                     log.info("%s: %s %d本投入 / 破棄 %d本", acc, gen_status, len(res["written"]), len(res["rejected"]))
