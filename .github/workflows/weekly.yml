@@ -42,20 +42,11 @@ jobs:
           PAUSED: ${{ vars.PAUSED || '0' }}
           REPORTS_DIR: reports
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # メール送信は main_weekly.py がアカウントごとに1通ずつ行う（ENABLE_EMAIL=1＋下記secret必須）。
+          # EMAIL_BUSINESSES を空にすると運用中の全アカウントに個別送信（既定）。
+          ENABLE_EMAIL: ${{ vars.ENABLE_EMAIL || '0' }}
+          EMAIL_BUSINESSES: ${{ vars.EMAIL_BUSINESSES || '' }}
+          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          MAIL_TO: ${{ vars.MAIL_TO || secrets.MAIL_USERNAME }}
         run: python main_weekly.py
-
-      - name: 公開前通知メール（HTMLレポート＋今週の投稿）
-        # メールを使うときだけ Variable ENABLE_EMAIL=1 を設定（secrets は if: で使えないため vars で制御）
-        if: ${{ vars.ENABLE_EMAIL == '1' }}
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          secure: true
-          username: ${{ secrets.MAIL_USERNAME }}
-          password: ${{ secrets.MAIL_PASSWORD }}
-          from: Threads週次レポート <${{ secrets.MAIL_USERNAME }}>
-          to: morll.0802@gmail.com
-          subject: "【Threads週次】分析レポート＋今週の自動投稿"
-          html_body: file://reports/メール本文.html
-          attachments: reports/*.html

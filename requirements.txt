@@ -1,3 +1,4 @@
 requests>=2.31
 gspread>=6.0
 google-auth>=2.30
+certifi>=2024.0

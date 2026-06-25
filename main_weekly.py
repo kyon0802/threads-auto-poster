@@ -25,10 +25,32 @@ from threads_poster.sheets import GoogleSheetStore
 from threads_poster.analyzer import Analyzer
 from threads_poster.reporter import Reporter
 from threads_poster.generator import Generator, GeneratorError
-from threads_poster.html_report import build_html, build_fragment, wrap_document
+from threads_poster.html_report import build_html
 from threads_poster.schedule import build_schedule
 from threads_poster.strategy import generate_strategy
+from threads_poster.mailer import send_html
 from main import resolve_business_sheets
+
+# 事業名 → メール件名に出す日本語ラベル
+BIZ_LABEL = {"seizogyo": "製造業", "uranai": "占い"}
+
+
+def send_account_reports(reports: list[dict], *, user: str, password: str, to: str,
+                         gen_date: str = "", send_fn=None) -> tuple[int, int]:
+    """アカウントごとに1通ずつ個別メールを送る。(送信成功数, 失敗数) を返す。
+    reports=[{account,label,html,filename}]。send_fn は注入可（テスト用）。"""
+    send_fn = send_fn or send_html
+    sender = f"Threads週次レポート <{user}>"
+    sent = failed = 0
+    for rep in reports:
+        subject = f"【Threads週次】{rep['label']}｜{rep['account']}" + (f"（{gen_date}）" if gen_date else "")
+        try:
+            send_fn(user, password, sender, to, subject, rep["html"], attachment_name=rep.get("filename"))
+            sent += 1
+        except Exception:  # noqa: BLE001 1通の失敗で他アカの送信は止めない
+            failed += 1
+            logging.getLogger("main_weekly").exception("メール送信失敗: %s", rep.get("account"))
+    return sent, failed
 
 
 def enrich_tops_with_text(posts: list, account: str, analysis: dict) -> None:
@@ -80,8 +102,9 @@ def main() -> int:
         log.info("PAUSED=1：一時停止中のため生成は行いません（分析・レポートのみ）")
         generate = False
 
-    # メールに含める事業（既定＝製造業のみ）。Variable EMAIL_BUSINESSES="seizogyo,uranai" で変更可。
-    email_businesses = set(b.strip() for b in os.environ.get("EMAIL_BUSINESSES", "seizogyo").split(",") if b.strip())
+    # メール送信する事業（空＝全事業＝運用中の全アカウントへ個別送信）。
+    # 限定したいときだけ Variable EMAIL_BUSINESSES="seizogyo" 等を設定。
+    email_businesses = set(b.strip() for b in os.environ.get("EMAIL_BUSINESSES", "").split(",") if b.strip())
 
     sa_info = json.loads(sa_json)
     gen_date = datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d")
@@ -89,7 +112,7 @@ def main() -> int:
     THEME = {"seizogyo": "seizo", "uranai": "uranai"}
     totals = {"analyzed": 0, "reported": 0, "generated_drafts": 0}
     failures = 0
-    fragments = []  # メール本文に入れる各アカのレポート本体
+    email_reports = []  # アカウントごとに個別送信するレポート [{account,label,html,filename}]
 
     for name, sid in sheets:
         log.info("=== 事業 '%s' の週次処理 (sheet=%s…) ===", name, str(sid)[:10])
@@ -103,23 +126,28 @@ def main() -> int:
             continue
 
         theme = THEME.get(name, "seizo")
-        in_email = name in email_businesses  # メールに載せる事業か（既定＝製造業のみ）
+        # メール対象の事業か（EMAIL_BUSINESSES 空＝全事業＝運用中の全アカウントに個別送信）。
+        in_email = (not email_businesses) or (name in email_businesses)
         for acc in accounts:
             try:
                 analysis = Analyzer(store).run(acc)
                 totals["analyzed"] += 1
                 Reporter(store).run(acc, analysis, gen_date)
                 totals["reported"] += 1
-                # レポート成果物（本文結合・方針生成・HTML/メール）はメール対象の事業だけ作る
+                # レポート成果物（本文結合・方針生成・HTML）はメール対象の事業だけ作る
                 # （対象外の事業は分析・レポートタブ更新・投稿生成のみ＝無駄なAI課金/レンダリングを避ける）。
                 if in_email:
                     enrich_tops_with_text(posts_all, acc, analysis)  # TOP5に実際の本文を結合
                     # 来週の方針＋投稿例（AI生成）。generate=False(PAUSED や GENERATE_POSTS=0)なら
                     # 課金を避けるため呼ばず None＝方針セクションなしでレポートは出す。
                     strategy = generate_strategy(store, acc, analysis, model=gen_model) if generate else None
-                    with open(os.path.join(reports_dir, f"週次レポート_{acc}_{gen_date}.html"), "w", encoding="utf-8") as f:
-                        f.write(build_html(acc, analysis, gen_date, theme=theme, title=acc, strategy=strategy))
-                    fragments.append(build_fragment(acc, analysis, gen_date, theme=theme, title=acc, strategy=strategy))
+                    fname = f"週次レポート_{acc}_{gen_date}.html"
+                    html = build_html(acc, analysis, gen_date, theme=theme, title=acc, strategy=strategy)
+                    with open(os.path.join(reports_dir, fname), "w", encoding="utf-8") as f:
+                        f.write(html)
+                    # アカウントごとに1通ずつ送るため、ここで個別に貯める
+                    email_reports.append({"account": acc, "label": BIZ_LABEL.get(name, name),
+                                          "html": html, "filename": fname})
                 if generate:
                     schedule_fn = SCHEDULE_FN_BY_BUSINESS.get(name)
                     acc_n_posts = n_posts_for(name, os.environ, n_posts)
@@ -134,12 +162,26 @@ def main() -> int:
                 failures += 1
                 log.exception("%s の週次処理に失敗: %s", acc, e)
 
-    # メール本文＝各アカの視覚レポートをそのまま1通に（メールで開いてすぐ読める）。
-    email_html = wrap_document("Threads 週次レポート", "".join(fragments) or "<p>対象なし</p>")
-    with open(os.path.join(reports_dir, "メール本文.html"), "w", encoding="utf-8") as f:
-        f.write(email_html)
+    # アカウントごとに1通ずつ個別メール送信（ENABLE_EMAIL=1 ＋ MAIL_USERNAME/MAIL_PASSWORD 必須）。
+    enable_email = os.environ.get("ENABLE_EMAIL") == "1"
+    mail_user = os.environ.get("MAIL_USERNAME")
+    mail_pw = os.environ.get("MAIL_PASSWORD")
+    mail_to = os.environ.get("MAIL_TO") or mail_user
+    if enable_email and email_reports:
+        if mail_user and mail_pw:
+            sent, mail_failed = send_account_reports(
+                email_reports, user=mail_user, password=mail_pw, to=mail_to, gen_date=gen_date)
+            failures += mail_failed
+            log.info("メール送信: %d通成功 / %d通失敗 (宛先 %s)", sent, mail_failed, mail_to)
+        else:
+            # ENABLE_EMAIL=1 なのに認証情報が無い＝設定ミス。静かに緑にせず失敗扱いで気づけるようにする。
+            failures += 1
+            log.error("ENABLE_EMAIL=1 だが MAIL_USERNAME/MAIL_PASSWORD 未設定のため送信できません（設定を確認）")
+    elif enable_email and not email_reports:
+        log.info("ENABLE_EMAIL=1 だが送信対象のレポートが0件でした（EMAIL_BUSINESSES/対象アカウントを確認）")
 
-    log.info("完了: %s / 失敗=%d / 生成=%s", totals, failures, "ON" if generate else "OFF")
+    log.info("完了: %s / 失敗=%d / 生成=%s / メール対象=%d件",
+             totals, failures, "ON" if generate else "OFF", len(email_reports))
     return 0 if failures == 0 else 2
 
 

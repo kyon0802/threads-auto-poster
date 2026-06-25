@@ -32,17 +32,26 @@ def _wins(analysis: dict) -> list[str]:
     return wins
 
 
-def build_strategy_prompt(account: str, analysis: dict, knowledge: str, guideline: list[dict]) -> str:
+def build_strategy_prompt(account: str, analysis: dict, knowledge: str, guideline: list[dict],
+                          profile: dict | None = None) -> str:
     wins = "／".join(_wins(analysis)) or "（データ蓄積中）"
     guide = "\n".join(f"- [{g.get('重大度')}] {g.get('分類')}: {g.get('ルール')}" for g in guideline)
     know = knowledge.strip()[:8000]
+    # 知識源：ナレッジ全文（濃い）を最優先。無ければプロフィール（声/テーマ/お手本/NG）を使う。
+    if know:
+        know_section = "## 事業ナレッジ（声・戦略・合法ライン・勝ち筋）\n" + know
+    elif profile:
+        prof = "\n".join(f"- {k}: {v}" for k, v in profile.items())
+        know_section = "## プロフィール（声・テーマ・お手本・NG）\n" + prof
+    else:
+        know_section = "## 事業ナレッジ\n（なし）"
     return (
         f"あなたはThreadsアカウント「{account}」の専属コンテンツ戦略担当です。\n"
-        f"直近の実績分析と事業ナレッジをもとに、**来週1週間の運用方針**を立ててください。\n\n"
+        f"直近の実績分析と事業ナレッジ/プロフィールをもとに、**来週1週間の運用方針**を立ててください。\n\n"
         f"## 直近の勝ちパターン（実データ）\n{wins}\n"
         f"・総表示 {analysis.get('total_views')}／平均エンゲージ率 {analysis.get('avg_er')}／"
         f"分析対象 {analysis.get('n_posts')}投稿\n\n"
-        f"## 事業ナレッジ（声・戦略・合法ライン・勝ち筋）\n{know or '（なし）'}\n\n"
+        f"{know_section}\n\n"
         f"## ガイドライン（厳守・違反例文は破棄される）\n{guide}\n\n"
         f"## 出力（JSON）\n"
         f"- direction: 来週の方針（3〜5文。なぜそうするかの根拠を実データに紐づけて具体的に）\n"
@@ -98,7 +107,7 @@ def generate_strategy(store, account: str, analysis: dict, generate_fn=None,
     ng = extract_ng_words(guideline)
     fn = generate_fn or make_anthropic_strategy_fn(model)
     try:
-        prompt = build_strategy_prompt(account, analysis, knowledge, guideline)
+        prompt = build_strategy_prompt(account, analysis, knowledge, guideline, profile)
         raw = fn(prompt)
     except Exception as e:  # noqa: BLE001 キー無し/通信失敗等。方針なしでレポートは出す。
         logger.warning("%s: 方針生成に失敗（方針なしで継続）: %s", account, e)

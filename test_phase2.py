@@ -192,6 +192,76 @@ def test_generator_legacy_schedule_unchanged():
     print("  ✓ generator 従来挙動（schedule_fn なし＝1日1本21時）維持 OK")
 
 
+def test_per_account_email_sending():
+    """アカウントごとに1通ずつ・正しい件名で送る（送信は注入したフェイクで検証）。"""
+    from main_weekly import send_account_reports
+    sent_calls = []
+
+    def fake_send(user, password, sender, to, subject, html, attachment_name=None):
+        sent_calls.append({"to": to, "subject": subject, "html": html, "att": attachment_name})
+
+    reports = [
+        {"account": "takumi_kojo_navi", "label": "製造業", "html": "<b>製造業</b>", "filename": "a.html"},
+        {"account": "miko_yui_musubi", "label": "占い", "html": "<b>占い</b>", "filename": "b.html"},
+    ]
+    sent, failed = send_account_reports(reports, user="u@x.com", password="pw",
+                                        to="dest@x.com", gen_date="2026-06-25", send_fn=fake_send)
+    assert (sent, failed) == (2, 0), (sent, failed)
+    assert len(sent_calls) == 2                                   # アカウント数だけ送る
+    assert sent_calls[0]["subject"] == "【Threads週次】製造業｜takumi_kojo_navi（2026-06-25）"
+    assert sent_calls[1]["subject"] == "【Threads週次】占い｜miko_yui_musubi（2026-06-25）"
+    assert all(c["to"] == "dest@x.com" for c in sent_calls)       # 同じ宛先に別々の通
+    print("  ✓ アカウントごとに個別メール送信（件名・通数）OK")
+
+
+def test_email_send_failure_isolated():
+    """1通失敗しても他は送る＆失敗数を返す。"""
+    from main_weekly import send_account_reports
+    def flaky(user, pw, sender, to, subject, html, attachment_name=None):
+        if "miko" in subject:
+            raise RuntimeError("smtp boom")
+    reports = [{"account": "takumi_kojo_navi", "label": "製造業", "html": "x", "filename": "a.html"},
+               {"account": "miko_yui_musubi", "label": "占い", "html": "y", "filename": "b.html"}]
+    sent, failed = send_account_reports(reports, user="u", password="p", to="d", send_fn=flaky)
+    assert (sent, failed) == (1, 1), (sent, failed)
+    print("  ✓ メール1通失敗が他通を止めない（失敗数を返す）OK")
+
+
+def test_mailer_build_message():
+    from threads_poster.mailer import build_message
+    msg = build_message("from@x.com", "to@x.com", "件名テスト", "<b>本文</b>",
+                        attachment_bytes=b"<b>x</b>", attachment_name="r.html")
+    assert msg["Subject"] == "件名テスト" and msg["To"] == "to@x.com" and msg["From"] == "from@x.com"
+    raw = msg.as_string()
+    assert "text/html" in raw and "attachment" in raw and "r.html" in raw
+    # ヘッダに改行（インジェクション）は拒否
+    try:
+        build_message("f@x", "t@x", "件名\r\nBcc: evil@x", "<b>x</b>")
+        assert False, "改行ヘッダを拒否しなかった"
+    except ValueError:
+        pass
+    print("  ✓ mailer.build_message（HTML本文＋HTML添付＋ヘッダ改行拒否）OK")
+
+
+def test_mailer_closes_connection_on_failure():
+    """smtp_factory 経路：login が失敗しても接続を必ず閉じる（try/finally）。"""
+    from threads_poster.mailer import send_message, build_message
+    events = []
+    class FakeSMTP:
+        def __init__(self, host, port): events.append("open")
+        def login(self, u, p): raise RuntimeError("auth fail")
+        def sendmail(self, *a): events.append("sent")
+        def quit(self): events.append("quit")
+    msg = build_message("f@x", "t@x", "s", "<b>x</b>")
+    try:
+        send_message("u", "p", msg, smtp_factory=lambda h, port: FakeSMTP(h, port))
+        assert False, "例外が伝播しなかった"
+    except RuntimeError:
+        pass
+    assert events == ["open", "quit"], events  # login失敗でも quit が呼ばれる
+    print("  ✓ mailer 送信失敗時も接続を閉じる（try/finally）OK")
+
+
 def test_build_prompt_includes_guideline():
     p = build_prompt("a1", {"声": "x"}, [{"分類": "法令", "ルール": "誇大NG", "重大度": "高"}],
                      {"by_time": [("夜(18-23)", 3, 500, 0.04)]}, 3)
@@ -212,5 +282,9 @@ if __name__ == "__main__":
     test_generator_pipeline()
     test_generator_with_schedule_fn_4_per_day()
     test_generator_legacy_schedule_unchanged()
+    test_per_account_email_sending()
+    test_email_send_failure_isolated()
+    test_mailer_build_message()
+    test_mailer_closes_connection_on_failure()
     test_build_prompt_includes_guideline()
     print("========== 全テスト PASS ==========")

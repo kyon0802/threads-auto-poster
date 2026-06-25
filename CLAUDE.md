@@ -365,3 +365,17 @@ PRD #2 の Phase 2 を実装。実績→分析→レポート→AI生成→**機
 - **メール配信**：`weekly.yml` の `dawidd6/action-send-mail`(smtp.gmail.com:465・宛先 morll.0802@gmail.com・本文 `reports/メール本文.html`・添付 `reports/*.html`)は既存。**有効化に `ENABLE_EMAIL=1`(Variable・設定済み)＋`MAIL_USERNAME`/`MAIL_PASSWORD`(Secret＝Gmailアプリパスワード・ユーザー作業)** が必要。次の月曜 cron から配信、または `workflow_dispatch` で即時テスト可。
 - **テスト**：`test_phase2.py` に analyze合計KPI＋ER順TOP5／**ER=0.0回帰**／strategyコンプラゲート／html(本文全文＋数値整形＋方針)の計4ケースを追加。全スイートPASS。実データ(製造業21投稿・総表示4,978・平均ER0.69%)でテストレポートを生成しデザイン確認済み（Desktop `週次レポート_製造業_テスト_20260625.html`）。
 - **adversarialレビュー(workflow)で確定7件中、major(ER=0.0脱落)＋minor(方針のPAUSED素通り)＋nit(NaN/inf・json.loads・encoding・posts再読込)を反映済み。**
+
+---
+
+## 23. 改修ログ（2026-06-25）週次メールを「アカウントごとに個別送信」へ
+
+ユーザー要望：運用中の**アカウントごとに別々のレポート＋別々のメール**（製造業と占いがそれぞれ1通ずつ届く）。
+
+- **送信をPython側へ移管**：GitHub Action の単一 `dawidd6/action-send-mail` ステップ（1通固定）を廃止し、`main_weekly.py` が**アカウントごとに1通ずつ**送る方式に変更。
+- **新規 `threads_poster/mailer.py`**：`build_message`(HTML本文＋同内容HTML添付の MIME)／`send_message`(SMTP_SSL・CAは `certifi.where()` 優先＝macOSの CERT_VERIFY_FAILED 回避・ubuntu可・`smtp_factory` 注入でテスト可)／`send_html`(便利関数)。
+- **`main_weekly.py`**：`send_account_reports(reports, user, password, to, gen_date, send_fn=None)`＝アカウント別に件名 `【Threads週次】<事業ラベル>｜<account>（日付）` で送信、1通失敗が他を止めず `(sent, failed)` を返す。ループでは各アカの `build_html` を `email_reports` に貯めて最後に送信。`EMAIL_BUSINESSES` は **空＝全事業（運用中の全アカに個別送信）**（旧 既定"seizogyo"から変更）。メール失敗は run の失敗数に計上。
+- **`weekly.yml`**：python ステップ env に `ENABLE_EMAIL`/`EMAIL_BUSINESSES`/`MAIL_USERNAME`/`MAIL_PASSWORD`/`MAIL_TO`(既定= MAIL_USERNAME) を追加。旧メールステップ削除（`reports/メール本文.html` 依存も解消）。
+- **`strategy.py` 修正**：`build_strategy_prompt` に `profile` を渡し、**ナレッジが空ならプロフィールを知識源に使う**（占いはナレッジ未同期・プロフィールのみのため、声が反映されない不具合を解消）。
+- **テスト**：`test_phase2.py` に 個別送信(件名・通数)／1通失敗の隔離／`build_message` の3ケース追加。全PASS。**実機テスト**＝製造業(views4978)＋占い(views53)の2通をローカルSMTPで実送信成功（宛先 morll.0802@gmail.com・各 Desktop にHTMLも保存）。
+- **設定状況**：`ENABLE_EMAIL=1`＋`MAIL_USERNAME`/`MAIL_PASSWORD` 設定済。`EMAIL_BUSINESSES` 未設定＝全事業。次の月曜cronから両アカが**別々のメール**で届く。
