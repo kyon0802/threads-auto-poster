@@ -351,3 +351,17 @@ PRD #2 の Phase 2 を実装。実績→分析→レポート→AI生成→**機
 - **既存 queued 投稿の再配置**：旧ロジックで「毎日21時・一部重複」に並んでいた generator 投稿9件（`takumi-g…`）を、新スケジュールへ**実シートで再配置**（明日06-26から 4＋4＋1）。専用 `scripts/reschedule_posts.py`（**既定 dry-run**・`--apply` で書込・`update_post` 再利用でアカウント別タブ限定RAW・**post_datetime のみ**更新／status/posted_id/row_id/本文は不変・読み戻し検証つき）。MAX_POSTS_PER_DAY=5 のままで 4/日 ≤ 5 で安全。
 - **テスト**：新規 `test_schedule.py`（最低間隔ヘルパ/配置不能/1日スロット/**500 seed の最低間隔30分＋窓内**/固定グリッドでない/4本詰め/28本=7×4/再現性＝8 PASS）。`test_phase2.py` に generator＋schedule_fn（1日4本検証）と従来挙動維持の2件を追加（計8 PASS）。`test_logic`/`test_collect` も全PASS。
 - **過渡期メモ**：再配置9件は 06-26〜06-28(部分) をカバー。次の週次 run（月曜06-29 06:00）が翌日06-30から28本を再生成し以降は毎日4本で自走。06-29 は薄い（再配置の端数）。**製造業は過去2回BAN・現状 `GEN_STATUS=queued`（無確認自動公開）**＝物量増（28/週）に伴い凍結リスクが上がる点は要観察（必要なら `GEN_STATUS=draft` で確認運用へ）。
+
+---
+
+## 22. 改修ログ（2026-06-25）週次レポートの強化（TOP5全文＋詳細KPI＋デザイン刷新＋来週方針＋メール配信）
+
+ユーザー要望で週次レポートを刷新。①TOP5を**実際の投稿本文で全文表示**②各項目に説明をつけ曖昧さ排除③**明るい白ベースのシンプルなデザイン**④**来週の方針＋具体的な投稿例3本**（AI生成）⑤morll.0802@gmail.com へ**毎週メール配信**。
+
+- **`html_report.py` 全面刷新**：ダーク→**明るい白ベース**。**メール(Gmail)でもそのまま読める**よう table＋全要素インラインCSS（flex/grid/`<style>`/外部CSSなし）。セクション＝KPIサマリ(各指標に1行説明)／投稿ランキングTOP5(表示数順)／同(エンゲージ率順)／傾向分析(棒グラフ＋読み解き)／来週の方針／投稿例3本。`build_fragment`(本体)＋`wrap_document`(全文書)＋`build_html`(1アカ完結)に分割し、複数アカを1通のメールに連結可能。NaN/inf は『—』表示。本文は改行保持＋HTMLエスケープ(XSS安全)。
+- **`analyzer.py`**：`total_views`/`total_reactions`/`avg_er` のKPI合計と、**エンゲージ率順TOP5(`top_er`)** を追加（従来の表示数順 `top` と併存）。`_entry` に likes/replies/reposts/quotes/reactions を含め全文結合(`text`)は下流で付与。★**ER=0.0 を欠落扱いしないよう修正**（`x or ""` は数値0.0が falsy で平均/ランキングから脱落し avg_er が上振れしていた→`_has_er` で None/空文字のみ欠落判定）。
+- **`strategy.py`（新規）**：来週方針(direction)＋やること(focus)＋投稿例(examples 3本)を Claude で生成（`make_anthropic_strategy_fn`・`generate_fn` 注入可）。例文は**機械コンプラゲート**(NGワード/URL/字数)を通し違反は除外。キー無し/失敗時は **None**（方針セクションなしでレポートは出る）。**読取専用＝投稿キューに触れない**。
+- **`main_weekly.py`**：分析→`enrich_tops_with_text`(投稿後ID経由でTOP5に本文結合・事業ごと posts を1回読みで使い回し)→reporter→**方針生成(`generate` が True のときのみ＝PAUSED/GENERATE_POSTS を尊重・課金抑制)**→HTMLレポート(reports/保存)＋メール本文 fragment。メール本文＝各アカの視覚レポートを連結した1通。全 `open` に `encoding="utf-8"`。
+- **メール配信**：`weekly.yml` の `dawidd6/action-send-mail`(smtp.gmail.com:465・宛先 morll.0802@gmail.com・本文 `reports/メール本文.html`・添付 `reports/*.html`)は既存。**有効化に `ENABLE_EMAIL=1`(Variable・設定済み)＋`MAIL_USERNAME`/`MAIL_PASSWORD`(Secret＝Gmailアプリパスワード・ユーザー作業)** が必要。次の月曜 cron から配信、または `workflow_dispatch` で即時テスト可。
+- **テスト**：`test_phase2.py` に analyze合計KPI＋ER順TOP5／**ER=0.0回帰**／strategyコンプラゲート／html(本文全文＋数値整形＋方針)の計4ケースを追加。全スイートPASS。実データ(製造業21投稿・総表示4,978・平均ER0.69%)でテストレポートを生成しデザイン確認済み（Desktop `週次レポート_製造業_テスト_20260625.html`）。
+- **adversarialレビュー(workflow)で確定7件中、major(ER=0.0脱落)＋minor(方針のPAUSED素通り)＋nit(NaN/inf・json.loads・encoding・posts再読込)を反映済み。**

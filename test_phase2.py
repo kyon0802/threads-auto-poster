@@ -40,6 +40,75 @@ def test_analyze_latest_snapshot():
     print("  ✓ 最新スナップショットを採用（同一投稿の重複を排除）OK")
 
 
+def test_analyze_totals_and_top_er():
+    rows = [ins("1", "2026-06-22 21:00", 1000, 0.05, 120),
+            ins("2", "2026-06-23 08:00", 100, 0.01, 50),
+            ins("3", "2026-06-22 21:30", 800, "", 150)]  # ER空＝ER順の対象外
+    # likes 等を足してリアクション合計を検証
+    rows[0]["likes"], rows[0]["replies"] = 3, 2
+    a = analyze_insights(rows)
+    assert a["total_views"] == 1900, a["total_views"]
+    assert a["total_reactions"] == 5, a["total_reactions"]   # likes3+replies2
+    assert a["avg_er"] == round((0.05 + 0.01) / 2, 4), a["avg_er"]
+    # ER順TOP：ERが入っている2件のみ・降順
+    assert [e["posted_id"] for e in a["top_er"]] == ["1", "2"], a["top_er"]
+    # 表示順TOPは views 降順
+    assert [e["posted_id"] for e in a["top"]][:3] == ["1", "3", "2"], a["top"]
+    print("  ✓ analyze 合計KPI＋ER順TOP5 OK")
+
+
+def test_analyze_er_zero_is_kept():
+    # ER=0.0（表示はあるが反応ゼロ）は欠落ではなく有効値。avg_er と top_er に含めるべき。
+    rows = [ins("1", "2026-06-22 21:00", 500, 0.0, 100),     # float 0.0
+            {"account": "a1", "posted_id": "2", "snapshot_date": "2026-06-24",
+             "post_datetime": "2026-06-22 22:00", "views": 300, "engagement_rate": 0, "text_len": 100},  # int 0（シート由来）
+            ins("3", "2026-06-23 20:00", 200, 0.04, 100)]
+    a = analyze_insights(rows)
+    assert a["avg_er"] == round((0.0 + 0.0 + 0.04) / 3, 4), a["avg_er"]   # 0.0 を平均に含める
+    assert len(a["top_er"]) == 3, a["top_er"]                              # 0.0 もランキング対象
+    assert a["top_er"][0]["posted_id"] == "3"                             # 0.04 が先頭
+    print("  ✓ analyze ER=0.0 を有効値として集計（avg/ランキングに含める）OK")
+
+
+def test_strategy_compliance_gate():
+    from threads_poster.strategy import generate_strategy
+    store = MemoryStore([{"account": "takumi_kojo_navi"}], [])
+    store.profiles = {"takumi_kojo_navi": {"声": "現場目線"}}
+    store.guideline = [{"分類": "NGワード（自動遮断）", "ルール": "絶対 / 今すぐDM", "重大度": "高"}]
+    fake = lambda p: {  # noqa: E731
+        "direction": "夜の時間帯に主要投稿を寄せる。100字前後を基準にする。",
+        "focus": ["夜(18-23)に主要投稿", "100字前後", "共感フックで始める"],
+        "examples": [
+            {"狙い": "共感", "本文": "がんばっても報われない夜に。明日は少しラクにいきましょう。"},   # 合格
+            {"狙い": "煽り", "本文": "絶対に稼げます。今すぐDM。"},                                  # NG（絶対/今すぐDM）
+            {"狙い": "誘導", "本文": "詳細は https://line.me/x へ"},                                # NG（URL）
+        ],
+    }
+    s = generate_strategy(store, "takumi_kojo_navi", {"by_time": []}, generate_fn=fake)
+    assert s is not None and len(s["examples"]) == 1, s
+    assert s["examples"][0]["aim"] == "共感"
+    assert len(s["focus"]) == 3 and s["direction"]
+    print("  ✓ strategy（方針＋例文・NG例はコンプラで除外）OK")
+
+
+def test_html_report_renders_text_and_strategy():
+    from threads_poster.html_report import build_html
+    analysis = {"n_posts": 2, "total_views": 1900, "total_reactions": 5, "avg_er": 0.03,
+                "by_time": [("夜(18-23)", 2, 900, 0.04)], "by_weekday": [], "by_length": [], "by_tree": [],
+                "top": [{"posted_id": "1", "post_datetime": "2026-06-22 21:00", "views": 1000,
+                         "engagement_rate": 0.05, "likes": 3, "replies": 2, "reposts": 0,
+                         "text_len": 120, "text": "現場の本音をひとつ。\n手取りの話をします。"}],
+                "top_er": []}
+    strategy = {"direction": "夜に寄せる。", "focus": ["夜に主要投稿"],
+                "examples": [{"aim": "共感", "text": "明日は少しラクに。"}]}
+    html = build_html("takumi_kojo_navi", analysis, "2026-06-25", theme="seizo", strategy=strategy)
+    assert "現場の本音をひとつ。<br>手取りの話をします。" in html  # 本文全文＋改行保持
+    assert "1,000" in html and "5.00%" in html                       # 数値整形・ER%
+    assert "来週の方針" in html and "明日は少しラクに。" in html       # 方針＋例文
+    assert html.startswith("<!doctype html>") and "<table" in html    # メール安全なtable
+    print("  ✓ html_report（本文全文＋数値整形＋方針＋例文・table）OK")
+
+
 def test_compliance():
     ng = extract_ng_words([{"分類": "NGワード（自動遮断）", "ルール": "絶対 / 必ず / 今すぐDM"}])
     assert "絶対" in ng and "今すぐDM" in ng, ng
@@ -134,6 +203,10 @@ if __name__ == "__main__":
     print("=== Phase 2 テスト ===")
     test_analyze()
     test_analyze_latest_snapshot()
+    test_analyze_totals_and_top_er()
+    test_analyze_er_zero_is_kept()
+    test_strategy_compliance_gate()
+    test_html_report_renders_text_and_strategy()
     test_compliance()
     test_generator_gate_missing_profile()
     test_generator_pipeline()

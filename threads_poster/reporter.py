@@ -76,7 +76,7 @@ class Reporter:
             try:
                 os.makedirs(self.mirror_dir, exist_ok=True)
                 path = os.path.join(self.mirror_dir, f"週次レポート_{account}_{gen_date}.md")
-                with open(path, "w") as f:
+                with open(path, "w", encoding="utf-8") as f:
                     f.write(rep["markdown"])
                 logger.info("レポートをローカルにミラー: %s", path)
             except OSError as e:

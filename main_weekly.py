@@ -25,9 +25,25 @@ from threads_poster.sheets import GoogleSheetStore
 from threads_poster.analyzer import Analyzer
 from threads_poster.reporter import Reporter
 from threads_poster.generator import Generator, GeneratorError
-from threads_poster.html_report import build_html
+from threads_poster.html_report import build_html, build_fragment, wrap_document
 from threads_poster.schedule import build_schedule
+from threads_poster.strategy import generate_strategy
 from main import resolve_business_sheets
+
+
+def enrich_tops_with_text(posts: list, account: str, analysis: dict) -> None:
+    """ランキング(top / top_er)に投稿後ID経由で**実際の本文**を結合する（TOP5を全文表示するため）。
+    posts は store.get_posts() の結果（事業ごとに1回読んで使い回す＝Sheets読込を増やさない）。"""
+    pid2text = {}
+    for p in posts:
+        if str(p.get("account")) != account:
+            continue
+        pid = str(p.get("posted_id") or "")
+        if pid:
+            pid2text[pid] = p.get("text") or ""
+    for key in ("top", "top_er"):
+        for r in analysis.get(key, []):
+            r["text"] = pid2text.get(str(r.get("posted_id") or ""), "")
 
 # 事業ごとの予約時刻スケジュール戦略。
 # seizogyo（製造業 takumi_kojo_navi）＝1日4本（昼1＋夜18-23時に3本・最低間隔30分・ランダム配置）。
@@ -70,13 +86,14 @@ def main() -> int:
     THEME = {"seizogyo": "seizo", "uranai": "uranai"}
     totals = {"analyzed": 0, "reported": 0, "generated_drafts": 0}
     failures = 0
-    summaries = []
+    fragments = []  # メール本文に入れる各アカのレポート本体
 
     for name, sid in sheets:
         log.info("=== 事業 '%s' の週次処理 (sheet=%s…) ===", name, str(sid)[:10])
         try:
             store = GoogleSheetStore(sa_info, sid)
             accounts = [a["account"] for a in store.get_accounts() if a.get("account")]
+            posts_all = store.get_posts()  # 事業で1回だけ読む（TOP5本文結合に使い回す）
         except Exception as e:  # noqa: BLE001
             failures += 1
             log.exception("事業 '%s' の初期化に失敗: %s", name, e)
@@ -87,21 +104,23 @@ def main() -> int:
             try:
                 analysis = Analyzer(store).run(acc)
                 totals["analyzed"] += 1
+                enrich_tops_with_text(posts_all, acc, analysis)  # TOP5に実際の本文を結合
                 Reporter(store).run(acc, analysis, gen_date)
                 totals["reported"] += 1
-                # HTMLダッシュボードを reports/ に出力（weekly.yml がメールで送る）
-                with open(os.path.join(reports_dir, f"週次レポート_{acc}_{gen_date}.html"), "w") as f:
-                    f.write(build_html(acc, analysis, gen_date, theme=theme, title=acc))
-                gen_titles = []
+                # 来週の方針＋投稿例（AI生成）。generate=False(PAUSED や GENERATE_POSTS=0)なら
+                # 課金を避けるため呼ばず None＝方針セクションなしでレポートは出す。
+                strategy = generate_strategy(store, acc, analysis, model=gen_model) if generate else None
+                # HTMLレポート（reports/に保存＝weekly.yml が添付）＋メール本文用 fragment
+                with open(os.path.join(reports_dir, f"週次レポート_{acc}_{gen_date}.html"), "w", encoding="utf-8") as f:
+                    f.write(build_html(acc, analysis, gen_date, theme=theme, title=acc, strategy=strategy))
+                fragments.append(build_fragment(acc, analysis, gen_date, theme=theme, title=acc, strategy=strategy))
                 if generate:
                     schedule_fn = SCHEDULE_FN_BY_BUSINESS.get(name)
                     acc_n_posts = n_posts_for(name, os.environ, n_posts)
                     res = Generator(store, acc, n_posts=acc_n_posts, model=gen_model,
                                     status=gen_status, schedule_fn=schedule_fn).run(analysis)
                     totals["generated_drafts"] += len(res["written"])
-                    gen_titles = [t.splitlines()[0][:38] for t in res["kept"]]
                     log.info("%s: %s %d本投入 / 破棄 %d本", acc, gen_status, len(res["written"]), len(res["rejected"]))
-                summaries.append((acc, analysis["n_posts"], gen_status, gen_titles))
             except GeneratorError as e:  # 必須タブ未整備（§17e）→ そのアカだけ失敗扱い
                 failures += 1
                 log.error("%s: 生成中止（プロフィール/ガイドライン未整備）: %s", acc, e)
@@ -109,20 +128,10 @@ def main() -> int:
                 failures += 1
                 log.exception("%s の週次処理に失敗: %s", acc, e)
 
-    # 公開前通知メールの本文（各アカの実績サマリ＋今週投稿する内容）
-    import html as _h
-    parts = ["<h2>Threads 週次レポート</h2>",
-             f"<p>生成日 {gen_date} ／ モード: {'queued=そのまま自動公開' if gen_status == 'queued' else 'draft=要確認'}</p>"]
-    for acc, npost, st, titles in summaries:
-        parts.append(f"<h3>{_h.escape(acc)}</h3><p>分析 {npost} 投稿。</p>")
-        if titles:
-            label = "今週そのまま自動公開する投稿" if st == "queued" else "今週の下書き（要確認）"
-            parts.append(f"<p><b>{label}</b>:</p><ul>"
-                         + "".join(f"<li>{_h.escape(t)}…</li>" for t in titles) + "</ul>")
-    parts.append("<p>※ 視覚的なダッシュボードは添付HTMLを開いてください。"
-                 "止めるには投稿キューの該当行を削除、または Variable PAUSED=1。</p>")
-    with open(os.path.join(reports_dir, "メール本文.html"), "w") as f:
-        f.write("\n".join(parts))
+    # メール本文＝各アカの視覚レポートをそのまま1通に（メールで開いてすぐ読める）。
+    email_html = wrap_document("Threads 週次レポート", "".join(fragments) or "<p>対象なし</p>")
+    with open(os.path.join(reports_dir, "メール本文.html"), "w", encoding="utf-8") as f:
+        f.write(email_html)
 
     log.info("完了: %s / 失敗=%d / 生成=%s", totals, failures, "ON" if generate else "OFF")
     return 0 if failures == 0 else 2
