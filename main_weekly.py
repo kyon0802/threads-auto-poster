@@ -80,6 +80,9 @@ def main() -> int:
         log.info("PAUSED=1：一時停止中のため生成は行いません（分析・レポートのみ）")
         generate = False
 
+    # メールに含める事業（既定＝製造業のみ）。Variable EMAIL_BUSINESSES="seizogyo,uranai" で変更可。
+    email_businesses = set(b.strip() for b in os.environ.get("EMAIL_BUSINESSES", "seizogyo").split(",") if b.strip())
+
     sa_info = json.loads(sa_json)
     gen_date = datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d")
     os.makedirs(reports_dir, exist_ok=True)
@@ -100,20 +103,23 @@ def main() -> int:
             continue
 
         theme = THEME.get(name, "seizo")
+        in_email = name in email_businesses  # メールに載せる事業か（既定＝製造業のみ）
         for acc in accounts:
             try:
                 analysis = Analyzer(store).run(acc)
                 totals["analyzed"] += 1
-                enrich_tops_with_text(posts_all, acc, analysis)  # TOP5に実際の本文を結合
                 Reporter(store).run(acc, analysis, gen_date)
                 totals["reported"] += 1
-                # 来週の方針＋投稿例（AI生成）。generate=False(PAUSED や GENERATE_POSTS=0)なら
-                # 課金を避けるため呼ばず None＝方針セクションなしでレポートは出す。
-                strategy = generate_strategy(store, acc, analysis, model=gen_model) if generate else None
-                # HTMLレポート（reports/に保存＝weekly.yml が添付）＋メール本文用 fragment
-                with open(os.path.join(reports_dir, f"週次レポート_{acc}_{gen_date}.html"), "w", encoding="utf-8") as f:
-                    f.write(build_html(acc, analysis, gen_date, theme=theme, title=acc, strategy=strategy))
-                fragments.append(build_fragment(acc, analysis, gen_date, theme=theme, title=acc, strategy=strategy))
+                # レポート成果物（本文結合・方針生成・HTML/メール）はメール対象の事業だけ作る
+                # （対象外の事業は分析・レポートタブ更新・投稿生成のみ＝無駄なAI課金/レンダリングを避ける）。
+                if in_email:
+                    enrich_tops_with_text(posts_all, acc, analysis)  # TOP5に実際の本文を結合
+                    # 来週の方針＋投稿例（AI生成）。generate=False(PAUSED や GENERATE_POSTS=0)なら
+                    # 課金を避けるため呼ばず None＝方針セクションなしでレポートは出す。
+                    strategy = generate_strategy(store, acc, analysis, model=gen_model) if generate else None
+                    with open(os.path.join(reports_dir, f"週次レポート_{acc}_{gen_date}.html"), "w", encoding="utf-8") as f:
+                        f.write(build_html(acc, analysis, gen_date, theme=theme, title=acc, strategy=strategy))
+                    fragments.append(build_fragment(acc, analysis, gen_date, theme=theme, title=acc, strategy=strategy))
                 if generate:
                     schedule_fn = SCHEDULE_FN_BY_BUSINESS.get(name)
                     acc_n_posts = n_posts_for(name, os.environ, n_posts)
