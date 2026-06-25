@@ -227,6 +227,13 @@ def test_email_send_failure_isolated():
     print("  ✓ メール1通失敗が他通を止めない（失敗数を返す）OK")
 
 
+def test_sort_posts_tab_noop():
+    # 既定 no-op（MemoryStore）は例外を投げない＝テスト/非Google環境で安全。
+    store = MemoryStore([{"account": "a1"}], [])
+    store.sort_posts_tab("a1", descending=True)
+    print("  ✓ sort_posts_tab 既定no-op（MemoryStore）OK")
+
+
 def test_mailer_build_message():
     from threads_poster.mailer import build_message
     msg = build_message("from@x.com", "to@x.com", "件名テスト", "<b>本文</b>",
@@ -284,6 +291,7 @@ if __name__ == "__main__":
     test_generator_legacy_schedule_unchanged()
     test_per_account_email_sending()
     test_email_send_failure_isolated()
+    test_sort_posts_tab_noop()
     test_mailer_build_message()
     test_mailer_closes_connection_on_failure()
     test_build_prompt_includes_guideline()

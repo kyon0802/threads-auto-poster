@@ -155,6 +155,8 @@ def main() -> int:
                                     status=gen_status, schedule_fn=schedule_fn).run(analysis)
                     totals["generated_drafts"] += len(res["written"])
                     log.info("%s: %s %d本投入 / 破棄 %d本", acc, gen_status, len(res["written"]), len(res["rejected"]))
+                # 投稿タブを投稿日時の降順に整える（新しい日付が上）。生成で追記した行も上に来る。
+                store.sort_posts_tab(acc, descending=True)
             except GeneratorError as e:  # 必須タブ未整備（§17e）→ そのアカだけ失敗扱い
                 failures += 1
                 log.error("%s: 生成中止（プロフィール/ガイドライン未整備）: %s", acc, e)

@@ -181,6 +181,12 @@ class Store(ABC):
     @abstractmethod
     def upsert_account_metric(self, account: str, snapshot_date: str, fields: dict) -> None: ...
 
+    def sort_posts_tab(self, account: str, descending: bool = True) -> None:
+        """投稿タブを投稿日時で並べ替える（既定 no-op。Google実装でのみ有効）。
+        新しい投稿が追記された後に呼ぶと「新しい日付が上」を保てる。順序は row_id で識別する
+        公開ロジックに影響しない（見た目だけ）。"""
+        return None
+
 
 # ---------------- 本番: Google Sheets ----------------
 class GoogleSheetStore(Store):
@@ -441,6 +447,29 @@ class GoogleSheetStore(Store):
             if internal in to_header and to_header[internal] in col_index:
                 row[col_index[to_header[internal]] - 1] = "" if v is None else str(v)
         with_retry(lambda: ws.append_row(row, value_input_option="RAW"))
+
+    def sort_posts_tab(self, account: str, descending: bool = True) -> None:
+        """投稿タブ（投稿_<account>）を投稿日時で並べ替える（降順＝新しい日付が上）。
+        行の入れ替えのみ（値は再フォーマットされない＝17桁IDも保持）。公開は row_id 識別で順序非依存。"""
+        import gspread
+
+        ws = next((w for w, acc in self.posts_tabs
+                   if (acc is not None and str(acc) == str(account)) or acc is None), None)
+        if ws is None:
+            return
+        header = with_retry(lambda: ws.row_values(1))
+        if not header:
+            return
+        to_internal, _ = header_maps(header, POSTS_FIELD_ALIASES)
+        col = next((i for i, h in enumerate(header, start=1)
+                    if to_internal.get(h, h) == "post_datetime"), None)
+        if col is None:
+            return
+        nrows = len(with_retry(ws.get_all_values))  # ヘッダ込みの使用行数
+        if nrows <= 2:
+            return  # データ1行以下なら並べ替え不要
+        rng = f"A2:{gspread.utils.rowcol_to_a1(nrows, len(header))}"
+        with_retry(lambda: ws.sort((col, "des" if descending else "asc"), range=rng))
 
 
 # ---------------- テスト用: メモリ ----------------

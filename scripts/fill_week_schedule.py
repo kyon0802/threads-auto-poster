@@ -110,6 +110,8 @@ def main() -> int:
         store.update_post(str(p["row_id"]), {"post_datetime": dt, "status": args.status},
                           account=args.account)
     print(f"\n✓ {len(selected)}本を予約（status={args.status}）。", file=sys.stderr)
+    store.sort_posts_tab(args.account, descending=True)  # 新しい日付が上に来るよう整える
+    print("✓ 投稿タブを日付降順に整列。", file=sys.stderr)
     # 読み戻し検証
     after = {str(p["row_id"]): (p.get("post_datetime"), str(p.get("status") or "").lower())
              for p in store.get_posts() if str(p.get("account")) == args.account}
