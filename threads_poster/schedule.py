@@ -64,25 +64,52 @@ def daily_slots_minutes(rng: random.Random,
     return [noon] + evening
 
 
-def build_schedule(n: int, *, start_date: datetime, tz=None,
-                   rng: random.Random | None = None, **daily_kwargs) -> list[str]:
-    """n 本の投稿に post_datetime（JST文字列 'YYYY-MM-DD HH:MM'）を割り当てて返す。
+# 事業別の1日スロット時間帯プリセット（generator/fill_week が共有）。
+# seizogyo（製造業）＝昼12:00前後＋夜18:00-23:00に3本。
+# uranai（占い）   ＝午前8:00-11:30＋夕方17:00-23:59に3本。
+PRESETS = {
+    "seizogyo": dict(noon_center_min=12 * 60, noon_jitter_min=30,
+                     evening_start_min=18 * 60, evening_end_min=23 * 60,
+                     evening_count=3, min_gap_min=30),
+    "uranai": dict(noon_center_min=9 * 60 + 45, noon_jitter_min=105,        # 午前 8:00-11:30
+                   evening_start_min=17 * 60, evening_end_min=23 * 60 + 59,  # 夕方-23:59
+                   evening_count=3, min_gap_min=30),
+}
 
-    - start_date の**翌日**から開始し、1日 `len(daily_slots_minutes())` 本（既定4本）ずつ詰める。
-    - 各日ごとに時刻を新規ランダム生成する（毎日同じ時間にならない）。
-    - 端数（最終日に4本に満たない分）は、その日の早い順（昼→夜）に必要数だけ採用する。
 
-    tz は使用しない（start_date が既に aware な前提）。互換のため引数だけ受ける。
+def build_schedule(n: int | None = None, *, start_date: datetime, tz=None,
+                   rng: random.Random | None = None, days: int | None = None,
+                   start_offset_days: int = 1, not_before: datetime | None = None,
+                   **daily_kwargs) -> list[str]:
+    """投稿に post_datetime（JST文字列 'YYYY-MM-DD HH:MM'）を割り当てて返す。
+
+    2つの停止条件:
+      - n 本モード（既定）: n 本そろうまで詰める。端数日は早い順に採用。
+      - days 日モード（days を渡す）: start から days 日分のスロットを全部出す（n は無視）。
+
+    - 開始日 = start_date + start_offset_days（既定 1＝翌日。0 なら当日から）。
+    - not_before を渡すと、それ以前（過去）のスロットは除外（当日は現在時刻以降だけ）。
+    - 各日ごとに時刻を新規ランダム生成（毎日同じ時間にならない）。
+
+    tz は未使用（start_date が aware な前提）。互換のため受けるだけ。
     """
     rng = rng or random.Random()
     out: list[str] = []
     day = 0
-    while len(out) < n:
-        base = (start_date + timedelta(days=day + 1)).replace(
+    while True:
+        if days is not None:
+            if day >= days:
+                break
+        elif len(out) >= (n or 0):
+            break
+        base = (start_date + timedelta(days=day + start_offset_days)).replace(
             hour=0, minute=0, second=0, microsecond=0)
         for m in daily_slots_minutes(rng, **daily_kwargs):
-            if len(out) >= n:
+            if days is None and len(out) >= (n or 0):
                 break
-            out.append((base + timedelta(minutes=m)).strftime("%Y-%m-%d %H:%M"))
+            dt = base + timedelta(minutes=m)
+            if not_before is not None and dt <= not_before:
+                continue  # 過去スロット（当日の現在時刻以前）はスキップ
+            out.append(dt.strftime("%Y-%m-%d %H:%M"))
         day += 1
     return out

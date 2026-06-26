@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from threads_poster.sheets import GoogleSheetStore  # noqa: E402
-from threads_poster.schedule import build_schedule  # noqa: E402
+from threads_poster.schedule import build_schedule, PRESETS  # noqa: E402
 from threads_poster.compliance import check_post, extract_ng_words  # noqa: E402
 
 PLACEHOLDER_CHARS = ["◯", "〇", "○"]  # 未確定プレースホルダ（自動公開させない）
@@ -60,12 +60,13 @@ def main() -> int:
     ap.add_argument("--include-drafts", action="store_true", help="draft も在庫として使う")
     ap.add_argument("--tz", default="Asia/Tokyo")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--start-today", action="store_true",
+                    help="翌日からではなく当日から開始し、現在時刻以前のスロットは除外する")
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
 
     daily = PRESETS[args.preset]
     per_day = 1 + daily["evening_count"]
-    need = args.days * per_day
     sa_info = json.load(open(args.sa, encoding="utf-8"))
     tz = ZoneInfo(args.tz)
     now = datetime.now(tz)
@@ -89,10 +90,17 @@ def main() -> int:
         print(f"除外（不適格）{len(skipped)}本:")
         for p, issues in skipped:
             print(f"   {p.get('row_id')}: {', '.join(issues)} | {str(p.get('text') or '')[:16]}")
-    selected = pool[:need]
 
     rng = random.Random(args.seed) if args.seed is not None else random.Random()
-    schedule = build_schedule(len(selected), start_date=now, tz=tz, rng=rng, **daily)
+    # --start-today: 当日(day0)から開始＋現在時刻以前を除外。day0 は端数（夕方のみ等）になるので
+    #   days 日モードで「day0部分＋以降満日」を厳密に出す。通常時は従来どおり days*per_day 本。
+    if args.start_today:
+        schedule = build_schedule(days=args.days, start_date=now, tz=tz, rng=rng,
+                                  start_offset_days=0, not_before=now, **daily)
+    else:
+        schedule = build_schedule(args.days * per_day, start_date=now, tz=tz, rng=rng, **daily)
+    need = len(schedule)
+    selected = pool[:need]
 
     print(f"=== {args.account} / preset={args.preset} / {len(selected)}本を {args.days}日×{per_day} に割当"
           f"（{'APPLY' if args.apply else 'DRY-RUN'}）===")

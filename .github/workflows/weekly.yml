@@ -2,9 +2,11 @@ name: threads-weekly-report
 
 on:
   schedule:
-    # 毎週月曜 06:00 JST（= 日曜 21:00 UTC）。分析→週次レポート→（任意で）翌週コンテンツ生成。
-    - cron: "0 21 * * 0"
-  workflow_dispatch: {}
+    # 毎日 06:00 JST（= 21:00 UTC）に起動するが、main_weekly.py 内の3日サイクルゲートが
+    # 起点日(2026-06-28)から3日ごとの日だけ本処理を実行する（それ以外の日は即終了）。
+    # ＝「3日分の投稿生成→3日分を分析してレポート」を3日に1回のPDCAで回す。
+    - cron: "0 21 * * *"
+  workflow_dispatch: {}   # 手動実行。FORCE_CYCLE=1 を Variable に入れるとサイクル日以外でも実行可。
 
 concurrency:
   group: threads-weekly   # 投稿/収集とは別系統
@@ -35,11 +37,15 @@ jobs:
           # GEN_STATUS=draft(人が確認) / queued(完全全自動で公開)。安全のため既定 draft。
           GEN_STATUS: ${{ vars.GEN_STATUS || 'draft' }}
           GEN_POSTS_PER_ACCOUNT: ${{ vars.GEN_POSTS_PER_ACCOUNT || '5' }}
-          # 製造業(seizogyo)のみ1日4本×7日＝28本（毎日4投稿を1週間フルカバー）。他事業は上記の既定5。
-          GEN_POSTS_SEIZOGYO: ${{ vars.GEN_POSTS_SEIZOGYO || '28' }}
+          # 1日4本スケジュール対象（製造業/占い）は1サイクル分＝3日×4本＝12本（既定）。
+          # 個別に上書きしたいときだけ Variable で設定。
+          GEN_POSTS_SEIZOGYO: ${{ vars.GEN_POSTS_SEIZOGYO || '12' }}
+          GEN_POSTS_URANAI: ${{ vars.GEN_POSTS_URANAI || '12' }}
           GEN_MODEL: ${{ vars.GEN_MODEL || 'claude-opus-4-8' }}
           # キルスイッチ: Variable PAUSED=1 で生成・投稿を即停止。
           PAUSED: ${{ vars.PAUSED || '0' }}
+          # 手動実行(workflow_dispatch)でサイクル日以外でも回したいとき Variable FORCE_CYCLE=1。
+          FORCE_CYCLE: ${{ vars.FORCE_CYCLE || '0' }}
           REPORTS_DIR: reports
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # メール送信は main_weekly.py がアカウントごとに1通ずつ行う（ENABLE_EMAIL=1＋下記secret必須）。

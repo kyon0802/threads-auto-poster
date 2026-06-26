@@ -379,3 +379,22 @@ PRD #2 の Phase 2 を実装。実績→分析→レポート→AI生成→**機
 - **`strategy.py` 修正**：`build_strategy_prompt` に `profile` を渡し、**ナレッジが空ならプロフィールを知識源に使う**（占いはナレッジ未同期・プロフィールのみのため、声が反映されない不具合を解消）。
 - **テスト**：`test_phase2.py` に 個別送信(件名・通数)／1通失敗の隔離／`build_message` の3ケース追加。全PASS。**実機テスト**＝製造業(views4978)＋占い(views53)の2通をローカルSMTPで実送信成功（宛先 morll.0802@gmail.com・各 Desktop にHTMLも保存）。
 - **設定状況**：`ENABLE_EMAIL=1`＋`MAIL_USERNAME`/`MAIL_PASSWORD` 設定済。`EMAIL_BUSINESSES` 未設定＝全事業。次の月曜cronから両アカが**別々のメール**で届く。
+
+---
+
+## 24. 改修ログ（2026-06-26）3日PDCAサイクル化＋占いも1日4本＋1文目フック/短文の徹底
+
+ユーザー要望：①PDCAを**3日に1回**（3日分生成→3日分を分析してレポート→繰り返す）②**占い(uranai)も1日4投稿**③占いの投稿は**長すぎる→短文化**、**1文目フックが最重要**（弱い1文目＝全く見られない／長文ほど表示回数が落ちる）。④初回は「本日(金)06-26の夕方から」投稿開始。
+
+- **3日サイクル（`main_weekly.py`）**：`weekly.yml` の cron を**毎日**(`0 21 * * *`＝06:00 JST)に変更し、`main_weekly.py` 冒頭の**サイクルゲート** `is_cycle_day(today)`＝`(today - CYCLE_ANCHOR) % 3 == 0` で**3日ごとの日だけ本処理**（分析→レポート→生成→メール）を実行、他日は即 `return 0`。`CYCLE_ANCHOR=2026-06-28`（初回手動サイクル06-26夕〜28の直後）→ 06-28／07-01／07-04… で稼働。`*/3` の day-of-month は月末で崩れるため**起点日アンカー方式**。手動実行は Variable/ env `FORCE_CYCLE=1` でゲートをバイパス。
+- **生成本数＝1サイクル分**：`n_posts_for` を「4本/日対象事業（`SCHEDULE_FN_BY_BUSINESS` に居る seizogyo/uranai）は `CYCLE_DAYS*POSTS_PER_DAY=3×4=12本`」に変更（旧 seizogyo=28本/週から）。`weekly.yml` の既定 `GEN_POSTS_SEIZOGYO=12`／新 `GEN_POSTS_URANAI=12`。各サイクルで generator は**翌日から3日×4本**を生成→06-28実行で06-29〜07-01、07-01実行で07-02〜07-04…と隙間なく連続。
+- **占いも1日4本（時間帯プリセット）**：`schedule.py` に `PRESETS`（`seizogyo`＝昼12時前後＋夜18-23時に3本／`uranai`＝午前8:00-11:30に1本＋夕方-深夜17:00-23:59に3本・どちらも最低間隔30分）。`SCHEDULE_FN_BY_BUSINESS={seizogyo, uranai}` に `partial(build_schedule, **PRESETS[...])` を登録（占いに専用時間帯を注入）。
+- **`build_schedule` 拡張**：`days`（日数モード）／`start_offset_days`（既定1＝翌日・0で当日開始）／`not_before`（過去スロット除外）を追加。初回「本日夕方スタート」は days=3・start_offset_days=0・not_before=now で**当日は現在時刻以前を除外**（午前枠が過ぎていれば夕方3本のみ）。
+- **1文目フック・短文ルール（全事業共通）**：`generator.THREADS_HOOK_RULES` を新設し `build_prompt`／`strategy.build_strategy_prompt` の両方に注入。要点＝(1)1文目が全て・挨拶/自己紹介/呼びかけ/定型句で始めない（占いの旧定型の挨拶導入＝弱い1文目を禁止例として明示）(2)短いほど伸びる・基本150字前後/最大250字 (3)1投稿1メッセージ (4)短文フック型を多めに。生成の字数上限を旧500字→短文方針に変更。コード側の例文は事業中立に（公開repo §17b 遵守）。
+- **`fill_week_schedule.py`**：`PRESETS` を `schedule.py` から import（重複定義を解消）。`--start-today`（当日開始＋現在時刻以前除外。days日モードで day0 端数＋以降満日）を追加。
+- **初回サイクルの実シート投入（06-26〜28・スクリプトは repo 外 scratchpad）**：
+  - **占い**：旧 queued/draft 32本（弱い1文目の挨拶定型で始まる長文）を **status=retired** へ退避（publisher は status∈{空,queued} のみ公開＝retiredは非公開）。Workflowで**強フック・短文（88-122字）**の新18本を生成→**機械コンプラゲート18/18合格**→先頭11本を **queued**（06-26 17時台〜・午前/夕方/夜の4本/日）＋残り7本を **draft 在庫**。
+  - **製造業**：内容は良好なので維持。06-26夕/27/28の queued 11本はそのまま、**06-29以降(B04〜B20＋空のB11)17本を draft 退避**して自動化(06-28実行)の生成と衝突回避。
+  - 投入は**タブ1回読み→batch_update＋append_rows の quota効率版・冪等**（per-row update_post は Read/min 429 に当たるため。§19と同方針）。
+- **テスト**：`test_schedule.py` に days日モード/当日開始/過去除外・占いプリセット（午前1＋夕方-深夜3・最低間隔30分・200seed）の2件、`test_phase2.py` に 3日サイクルゲート（月跨ぎ）/`n_posts_for`（4本/日=12・上書き）/uranai schedule_fn（午前+夕方夜）の3件を追加。全スイートPASS。
+- **要・運用反映（HITL）**：自動の3日サイクルを回すには `weekly.yml` を **enable**（現状 disable 想定）＋`GENERATE_POSTS=1`＋`ANTHROPIC_API_KEY`＋`GEN_STATUS`（占い/製造業を自動公開にするなら queued）。占いは過去BANリスク（霊感商法/景表法）に留意し、初回は queued で本日夕方公開。

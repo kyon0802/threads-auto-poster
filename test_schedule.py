@@ -14,6 +14,7 @@ from threads_poster.schedule import (
     daily_slots_minutes,
     build_schedule,
     _random_times_with_min_gap,
+    PRESETS,
 )
 
 JST = ZoneInfo("Asia/Tokyo")
@@ -135,6 +136,44 @@ def test_build_schedule_deterministic():
     print("  ✓ build_schedule（同seedで再現性あり）OK")
 
 
+def test_build_schedule_days_mode_start_today_skips_past():
+    """days日モード＋当日開始＋not_before：当日(day0)は現在時刻以前のスロットを除外し
+    残り日は満日（4本）になる。初回サイクル『本日夕方スタート』の実装を保証する。"""
+    from collections import Counter
+    now = datetime(2026, 6, 26, 14, 30, tzinfo=JST)   # 金曜14:30（昼スロットは既に過去）
+    out = build_schedule(days=3, start_date=now, tz=JST, rng=random.Random(11),
+                         start_offset_days=0, not_before=now)
+    days = Counter(s.split(" ")[0] for s in out)
+    # 当日(06-26)は昼12時台が過去で落ち、夜3本のみ。翌日以降は4本。
+    assert days["2026-06-26"] == 3, days
+    assert days["2026-06-27"] == 4 and days["2026-06-28"] == 4, days
+    assert "2026-06-29" not in days, days              # 3日きっかりで止まる
+    # 当日の全スロットが現在時刻より後
+    for s in out:
+        if s.startswith("2026-06-26"):
+            assert _minutes_of(s) > 14 * 60 + 30, s
+    assert out == sorted(out), out
+    print("  ✓ build_schedule（days日モード・当日開始・過去スロット除外）OK")
+
+
+def test_build_schedule_uranai_preset():
+    """占いプリセット：午前(8:00-11:30)に1本＋夕方-深夜(17:00-23:59)に3本。最低間隔30分。"""
+    AM_LO, AM_HI = 8 * 60, 11 * 60 + 30
+    PM_LO, PM_HI = 17 * 60, 23 * 60 + 59
+    for seed in range(200):
+        out = build_schedule(days=1, start_date=datetime(2026, 6, 27, 6, 0, tzinfo=JST),
+                             tz=JST, rng=random.Random(seed), start_offset_days=0,
+                             **PRESETS["uranai"])
+        mins = sorted(_minutes_of(s) for s in out)
+        assert len(mins) == 4, (seed, mins)
+        assert AM_LO <= mins[0] <= AM_HI, (seed, mins)        # 午前1本
+        for m in mins[1:]:
+            assert PM_LO <= m <= PM_HI, (seed, mins)          # 夕方-深夜3本
+        for a, b in zip(mins, mins[1:]):
+            assert b - a >= MIN_GAP, (seed, mins)
+    print("  ✓ build_schedule（占いプリセット：午前1＋夕方-深夜3・最低間隔30分）OK")
+
+
 if __name__ == "__main__":
     print("=== スケジューラ テスト ===")
     test_min_gap_helper_exact_fit()
@@ -146,4 +185,6 @@ if __name__ == "__main__":
     test_build_schedule_packs_4_per_day()
     test_build_schedule_full_week()
     test_build_schedule_deterministic()
+    test_build_schedule_days_mode_start_today_skips_past()
+    test_build_schedule_uranai_preset()
     print("========== 全テスト PASS ==========")

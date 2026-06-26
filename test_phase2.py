@@ -269,6 +269,46 @@ def test_mailer_closes_connection_on_failure():
     print("  ✓ mailer 送信失敗時も接続を閉じる（try/finally）OK")
 
 
+def test_cycle_gate_every_3_days():
+    """3日サイクルゲート：起点(06-28)から3日ごとの日だけ True。間の日は False。"""
+    from datetime import date
+    from main_weekly import is_cycle_day, CYCLE_ANCHOR
+    assert CYCLE_ANCHOR == date(2026, 6, 28), CYCLE_ANCHOR
+    assert is_cycle_day(date(2026, 6, 28))            # 起点
+    assert not is_cycle_day(date(2026, 6, 29))
+    assert not is_cycle_day(date(2026, 6, 30))
+    assert is_cycle_day(date(2026, 7, 1))             # +3
+    assert is_cycle_day(date(2026, 7, 4))             # +6（月跨ぎでも崩れない）
+    assert not is_cycle_day(date(2026, 7, 2))
+    print("  ✓ 3日サイクルゲート（起点から3日ごと・月跨ぎOK）OK")
+
+
+def test_n_posts_for_4perday_businesses():
+    """4本/日対象（seizogyo/uranai）は1サイクル分＝3日×4＝12本。他事業は既定値。
+    Variable GEN_POSTS_<NAME> で上書きできる。"""
+    from main_weekly import n_posts_for, SCHEDULE_FN_BY_BUSINESS
+    assert "seizogyo" in SCHEDULE_FN_BY_BUSINESS and "uranai" in SCHEDULE_FN_BY_BUSINESS
+    assert n_posts_for("seizogyo", {}, 5) == 12
+    assert n_posts_for("uranai", {}, 5) == 12
+    assert n_posts_for("uranai", {"GEN_POSTS_URANAI": "9"}, 5) == 9   # 上書き
+    assert n_posts_for("other", {}, 5) == 5                           # 対象外は既定
+    print("  ✓ n_posts_for（4本/日事業=12本・上書き可・他事業は既定）OK")
+
+
+def test_uranai_schedule_fn_uses_morning_evening():
+    """uranai の schedule_fn は午前1＋夕方-深夜3本を割り当てる（製造業の昼夜とは別プリセット）。"""
+    from main_weekly import SCHEDULE_FN_BY_BUSINESS
+    import random
+    fn = SCHEDULE_FN_BY_BUSINESS["uranai"]
+    out = fn(4, start_date=NOW, tz=None, rng=random.Random(0))  # NOW=06-24 → 翌日06-25に4本
+    assert len(out) == 4, out
+    mins = sorted(int(s[11:13]) * 60 + int(s[14:16]) for s in out)
+    assert 8 * 60 <= mins[0] <= 11 * 60 + 30, mins              # 午前1本
+    for m in mins[1:]:
+        assert 17 * 60 <= m <= 23 * 60 + 59, mins              # 夕方-深夜3本
+    print("  ✓ uranai schedule_fn（午前1＋夕方-深夜3本）OK")
+
+
 def test_build_prompt_includes_guideline():
     p = build_prompt("a1", {"声": "x"}, [{"分類": "法令", "ルール": "誇大NG", "重大度": "高"}],
                      {"by_time": [("夜(18-23)", 3, 500, 0.04)]}, 3)
@@ -294,5 +334,8 @@ if __name__ == "__main__":
     test_sort_posts_tab_noop()
     test_mailer_build_message()
     test_mailer_closes_connection_on_failure()
+    test_cycle_gate_every_3_days()
+    test_n_posts_for_4perday_businesses()
+    test_uranai_schedule_fn_uses_morning_evening()
     test_build_prompt_includes_guideline()
     print("========== 全テスト PASS ==========")

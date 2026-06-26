@@ -16,6 +16,7 @@ import json
 import logging
 
 from .compliance import check_post, extract_ng_words
+from .generator import THREADS_HOOK_RULES
 
 logger = logging.getLogger("strategy")
 DEFAULT_MODEL = "claude-opus-4-8"
@@ -53,11 +54,14 @@ def build_strategy_prompt(account: str, analysis: dict, knowledge: str, guidelin
         f"分析対象 {analysis.get('n_posts')}投稿\n\n"
         f"{know_section}\n\n"
         f"## ガイドライン（厳守・違反例文は破棄される）\n{guide}\n\n"
+        f"{THREADS_HOOK_RULES}\n\n"
         f"## 出力（JSON）\n"
-        f"- direction: 来週の方針（3〜5文。なぜそうするかの根拠を実データに紐づけて具体的に）\n"
+        f"- direction: 来週の方針（3〜5文。なぜそうするかの根拠を実データに紐づけて具体的に。"
+        f"特に「1文目フックの強化」と「短文化」を方針に必ず織り込む）\n"
         f"- focus: 具体的にやること（箇条書き3〜5個。時間帯/本文長/テーマ/フックなど実行可能な指示）\n"
         f"- examples: 方針に沿った投稿例を3本。各 {{狙い, 本文}}。本文はそのまま投稿できる完成形・"
-        f"NGワードと外部URLは使わない・1投稿500字以内・ナレッジの声と勝ち筋を踏襲。\n"
+        f"NGワードと外部URLは使わない・**1文目に強いフック**・短文（150字前後、長くても250字以内）・"
+        f"ナレッジの声と勝ち筋を踏襲。\n"
     )
 
 

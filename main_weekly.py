@@ -18,7 +18,8 @@ import os
 import json
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, date
+from functools import partial
 from zoneinfo import ZoneInfo
 
 from threads_poster.sheets import GoogleSheetStore
@@ -26,13 +27,28 @@ from threads_poster.analyzer import Analyzer
 from threads_poster.reporter import Reporter
 from threads_poster.generator import Generator, GeneratorError
 from threads_poster.html_report import build_html
-from threads_poster.schedule import build_schedule
+from threads_poster.schedule import build_schedule, PRESETS
 from threads_poster.strategy import generate_strategy
 from threads_poster.mailer import send_html
 from main import resolve_business_sheets
 
 # 事業名 → メール件名に出す日本語ラベル
 BIZ_LABEL = {"seizogyo": "製造業", "uranai": "占い"}
+
+# ── 3日サイクル（PDCA）設定 ──────────────────────────────────────────────
+# 「3日分の投稿を作成→3日分を分析してレポート」を3日ごとに繰り返す。
+# cron は毎日叩くが、ここで「起点日からの経過日数 % 3 == 0」の日だけ本処理を実行する
+# （day-of-month の */3 は月末→月初で間隔が崩れるため、起点日アンカー方式にする）。
+# 起点 = 2026-06-28（初回サイクル 06-26夕〜06-28 を手動投入した直後。以降 06-28/07-01/07-04…で稼働）。
+# 各サイクルで generator は「翌日から CYCLE_DAYS 日 × 4本」を生成するので、
+#   06-28実行→06-29〜07-01、07-01実行→07-02〜07-04… と隙間なく連続する。
+CYCLE_ANCHOR = date(2026, 6, 28)
+CYCLE_DAYS = 3
+POSTS_PER_DAY = 4
+
+
+def is_cycle_day(today: date) -> bool:
+    return (today - CYCLE_ANCHOR).days % CYCLE_DAYS == 0
 
 
 def send_account_reports(reports: list[dict], *, user: str, password: str, to: str,
@@ -67,18 +83,22 @@ def enrich_tops_with_text(posts: list, account: str, analysis: dict) -> None:
         for r in analysis.get(key, []):
             r["text"] = pid2text.get(str(r.get("posted_id") or ""), "")
 
-# 事業ごとの予約時刻スケジュール戦略。
-# seizogyo（製造業 takumi_kojo_navi）＝1日4本（昼1＋夜18-23時に3本・最低間隔30分・ランダム配置）。
-# それ以外（占い等）は None＝従来どおり（generator が翌日から1日1本・21時固定で割り当て）。
-SCHEDULE_FN_BY_BUSINESS = {"seizogyo": build_schedule}
+# 事業ごとの予約時刻スケジュール戦略（1日4本・ランダム配置・最低間隔30分）。
+# seizogyo（製造業）＝昼12時前後1本＋夜18-23時に3本。uranai（占い）＝午前1本＋夕方-深夜3本。
+# build_schedule に事業別プリセット（時間帯）を partial で固定。これを持たない事業は None＝
+# 従来どおり generator が翌日から1日1本・21時固定で割り当てる。
+SCHEDULE_FN_BY_BUSINESS = {
+    "seizogyo": partial(build_schedule, **PRESETS["seizogyo"]),
+    "uranai": partial(build_schedule, **PRESETS["uranai"]),
+}
 
 
 def n_posts_for(name: str, env, default_n: int) -> int:
-    """事業ごとの1アカ生成本数。seizogyo は「1日4本×7日＝28本」を既定（毎日4投稿を1週間フルカバー）。
-    Variable GEN_POSTS_SEIZOGYO で上書き可。その他事業は GEN_POSTS_PER_ACCOUNT（既定5）。
-    ※本数を事業ごとに分けるのは、占い等は従来どおり1日1本のため28本にすると28日先まで並んでしまうのを防ぐため。"""
-    if name == "seizogyo":
-        return int(env.get("GEN_POSTS_SEIZOGYO", "28"))
+    """事業ごとの1アカ生成本数。4本/日スケジュール対象（seizogyo/uranai）は
+    「CYCLE_DAYS 日 × 4本」＝1サイクル分（既定 3日×4＝12本）。Variable GEN_POSTS_<NAME> で上書き可
+    （例 GEN_POSTS_SEIZOGYO / GEN_POSTS_URANAI）。その他事業は GEN_POSTS_PER_ACCOUNT（既定5）。"""
+    if name in SCHEDULE_FN_BY_BUSINESS:
+        return int(env.get(f"GEN_POSTS_{name.upper()}", str(CYCLE_DAYS * POSTS_PER_DAY)))
     return default_n
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
@@ -97,6 +117,13 @@ def main() -> int:
     if not sa_json or not sheets:
         log.error("GOOGLE_SERVICE_ACCOUNT_JSON と (BUSINESSES または SPREADSHEET_ID) が必要です")
         return 1
+    # 3日サイクルゲート: cron は毎日叩くが、起点日から3日ごとの日だけ本処理（分析→レポート→生成→メール）
+    # を実行する。それ以外の日は即終了（次サイクルまで待機）。FORCE_CYCLE=1 で手動実行時はバイパス。
+    today = datetime.now(ZoneInfo(tz_name)).date()
+    if os.environ.get("FORCE_CYCLE") != "1" and not is_cycle_day(today):
+        log.info("3日サイクル外（起点=%s / 本日=%s / 周期=%d日）→ 本日は実行しません（次サイクルまで待機）",
+                 CYCLE_ANCHOR, today, CYCLE_DAYS)
+        return 0
     # キルスイッチ: PAUSED=1 なら生成を止める（分析・レポートは無害なので継続）
     if os.environ.get("PAUSED") == "1" and generate:
         log.info("PAUSED=1：一時停止中のため生成は行いません（分析・レポートのみ）")
