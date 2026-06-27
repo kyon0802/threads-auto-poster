@@ -64,9 +64,40 @@ def daily_slots_minutes(rng: random.Random,
     return [noon] + evening
 
 
+def daily_slots_windows(rng: random.Random, windows: list[tuple[int, int]],
+                        min_gap_min: int = 30) -> list[int]:
+    """複数の時間帯ウィンドウに**各1本ずつ**ランダム配置（昇順・最低間隔つき）。
+
+    windows = [(start_min, end_min), ...] を昇順・非重複の前提で受け、各窓内に1点を引く。
+    朝・昼・夕・夜のように窓が離れているアカウント（澪）向け。daily_slots_minutes（昼1＋夜N）
+    とは別系統。隣接窓どうしが min_gap_min を満たすことを検証（窓設定ミスを早期検知）。
+    """
+    times: list[int] = []
+    prev: int | None = None
+    for i, (s, e) in enumerate(windows):
+        if e < s:
+            raise ValueError(f"窓 {i} の終端 {e} が開始 {s} より前です")
+        lo = s if prev is None else max(s, prev + min_gap_min)
+        if lo > e:
+            raise ValueError(
+                f"窓 {i}=({s},{e}) が前の時刻＋最低間隔({min_gap_min})を満たせません。窓設定を見直してください。")
+        t = rng.randint(lo, e)
+        times.append(t)
+        prev = t
+    return times
+
+
+def _slots_for(rng: random.Random, **daily_kwargs) -> list[int]:
+    """daily_kwargs に windows があればウィンドウ型、無ければ昼1＋夜N型でスロットを返す。"""
+    if "windows" in daily_kwargs:
+        return daily_slots_windows(rng, **daily_kwargs)
+    return daily_slots_minutes(rng, **daily_kwargs)
+
+
 # 事業別の1日スロット時間帯プリセット（generator/fill_week が共有）。
 # seizogyo（製造業）＝昼12:00前後＋夜18:00-23:00に3本。
-# uranai（占い）   ＝午前8:00-11:30＋夕方17:00-23:59に3本。
+# uranai（占い「結」）＝午前8:00-11:30＋夕方17:00-23:59に3本。
+# meguri（占い「澪」）＝朝・昼・夕・夜の4窓に各1本（暦は朝の縁起日告知が映えるため朝型）。
 PRESETS = {
     "seizogyo": dict(noon_center_min=12 * 60, noon_jitter_min=30,
                      evening_start_min=18 * 60, evening_end_min=23 * 60,
@@ -74,6 +105,11 @@ PRESETS = {
     "uranai": dict(noon_center_min=9 * 60 + 45, noon_jitter_min=105,        # 午前 8:00-11:30
                    evening_start_min=17 * 60, evening_end_min=23 * 60 + 59,  # 夕方-23:59
                    evening_count=3, min_gap_min=30),
+    "meguri": dict(windows=[(6 * 60 + 30, 8 * 60 + 30),    # 朝 6:30-8:30（縁起日告知）
+                            (11 * 60 + 30, 13 * 60),        # 昼 11:30-13:00
+                            (17 * 60, 19 * 60),             # 夕 17:00-19:00
+                            (21 * 60, 23 * 60)],            # 夜 21:00-23:00
+                   min_gap_min=30),
 }
 
 
@@ -104,7 +140,7 @@ def build_schedule(n: int | None = None, *, start_date: datetime, tz=None,
             break
         base = (start_date + timedelta(days=day + start_offset_days)).replace(
             hour=0, minute=0, second=0, microsecond=0)
-        for m in daily_slots_minutes(rng, **daily_kwargs):
+        for m in _slots_for(rng, **daily_kwargs):
             if days is None and len(out) >= (n or 0):
                 break
             dt = base + timedelta(minutes=m)

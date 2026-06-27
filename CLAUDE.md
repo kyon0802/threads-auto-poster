@@ -398,3 +398,17 @@ PRD #2 の Phase 2 を実装。実績→分析→レポート→AI生成→**機
   - 投入は**タブ1回読み→batch_update＋append_rows の quota効率版・冪等**（per-row update_post は Read/min 429 に当たるため。§19と同方針）。
 - **テスト**：`test_schedule.py` に days日モード/当日開始/過去除外・占いプリセット（午前1＋夕方-深夜3・最低間隔30分・200seed）の2件、`test_phase2.py` に 3日サイクルゲート（月跨ぎ）/`n_posts_for`（4本/日=12・上書き）/uranai schedule_fn（午前+夕方夜）の3件を追加。全スイートPASS。
 - **要・運用反映（HITL）**：自動の3日サイクルを回すには `weekly.yml` を **enable**（現状 disable 想定）＋`GENERATE_POSTS=1`＋`ANTHROPIC_API_KEY`＋`GEN_STATUS`（占い/製造業を自動公開にするなら queued）。占いは過去BANリスク（霊感商法/景表法）に留意し、初回は queued で本日夕方公開。
+
+---
+
+## 25. 改修ログ（2026-06-27）3事業目＝占い新アカ「澪（みお）」のスカフォールディング追加
+
+実勝ち投稿42枚の徹底分析（占いThreads-note事業/手動 投稿リサーチ/分析_20260627）を経て、既存「結（縁結びの巫女・恋愛特化）」とカニバらない**3事業目**を立ち上げ中。コンセプト＝**「巡りを読む人 澪」＝暦・月・星の"巡り"で決断のタイミングを告げる、性別年齢を明かさない中性的な語り部**（マネタイズ＝note月額マガジン中心）。
+
+- **事業キー `meguri`**：`BIZ_LABEL`（占い（澪））／`SCHEDULE_FN_BY_BUSINESS`（`partial(build_schedule, **PRESETS["meguri"])`）／`THEME`（uranai色流用）に追加。`n_posts_for` は `SCHEDULE_FN_BY_BUSINESS` 在籍で自動的に 3日×4＝12本（`GEN_POSTS_MEGURI` で上書き可）。
+- **朝型スケジュール（新スロット系統）**：`schedule.py` に **`daily_slots_windows(rng, windows, min_gap)`**＝複数の時間帯ウィンドウに各1本ずつ配置（昼1＋夜N の `daily_slots_minutes` とは別系統）。`build_schedule` は `_slots_for` で「windows があればウィンドウ型／無ければ昼夜型」に分岐。`PRESETS["meguri"]`＝朝6:30-8:30／昼11:30-13:00／夕17:00-19:00／夜21:00-23:00 に各1本（暦は朝の縁起日告知が映える）。
+- **甘めガイドライン（重要・ユーザー指示）**：勝ち投稿は強い**断定・言い切り・常識否定**で当たる→厳しくすると当たらない。「ブランド純度の禁止」と「法律の硬い線」を分離し**後者だけ**守る。生成ゲートのNGワードは**最小ハード法務のみ**＝`治る/完治/効く/稼げる/儲かる/不労所得`（医療効果・金銭保証）。`必ず/絶対/100%/当たる` は**入れない**（断定トーンを殺すため）。霊感商法/有料商品の効果保証/誇大はガイドライン本文（LLMが読む）＋人で抑止する二段構え。
+- **コンテンツ生成済み（ローカル＝立ち上げフォルダ）**：`占いThreads-note事業/澪_新アカ立ち上げ/`＝コンセプト設計／ナレッジ／プロフィール／甘めガイドライン／**ローンチ投稿26本**（甘め検証＋ハードNGゲート全合格・129-168字）／bio2案＋固定投稿。生成は Workflow（5本柱×勝ちフック型→敵対的甘め検証）。
+- **専用スプレッドシート新規作成**（morll所有・IDは公開repoに書かない＝memory/scratchpadで管理＝§17b/§18）。タブ構築＋curation＋26投稿(draft在庫)投入は **scratchpad の `build_mio_sheet.py`**（SA共有後に `--apply`・冪等）。**SAへの共有がブロッカー**（claude.ai Drive MCP に権限付与APIが無く、ユーザー手動共有が必要）。
+- **コードは inert**：`meguri` を `BUSINESSES` secret に入れるまで何も動かない（=スカフォールディングのみ安全に commit）。**起動の残（HITL）**：①ユーザーが新Threadsアカ作成＋トークン取得（§15手順）②シートをSAに共有→`build_mio_sheet.py --apply`③accounts にトークン＋`BUSINESSES` に3事業目追加④初回サイクルを fill（`--preset meguri --start-today`）。暦の正確性（縁起日/節気の実データ参照）は今後の要対応事項。
+- **テスト**：`test_schedule.py` に `daily_slots_windows`（澪4窓・200seed）と build_schedule×meguri preset の2件追加。全スイートPASS。

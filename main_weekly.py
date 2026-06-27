@@ -33,7 +33,7 @@ from threads_poster.mailer import send_html
 from main import resolve_business_sheets
 
 # 事業名 → メール件名に出す日本語ラベル
-BIZ_LABEL = {"seizogyo": "製造業", "uranai": "占い"}
+BIZ_LABEL = {"seizogyo": "製造業", "uranai": "占い（結）", "meguri": "占い（澪）"}
 
 # ── 3日サイクル（PDCA）設定 ──────────────────────────────────────────────
 # 「3日分の投稿を作成→3日分を分析してレポート」を3日ごとに繰り返す。
@@ -90,6 +90,7 @@ def enrich_tops_with_text(posts: list, account: str, analysis: dict) -> None:
 SCHEDULE_FN_BY_BUSINESS = {
     "seizogyo": partial(build_schedule, **PRESETS["seizogyo"]),
     "uranai": partial(build_schedule, **PRESETS["uranai"]),
+    "meguri": partial(build_schedule, **PRESETS["meguri"]),  # 占い「澪」＝朝昼夕夜の4窓
 }
 
 
@@ -136,7 +137,7 @@ def main() -> int:
     sa_info = json.loads(sa_json)
     gen_date = datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d")
     os.makedirs(reports_dir, exist_ok=True)
-    THEME = {"seizogyo": "seizo", "uranai": "uranai"}
+    THEME = {"seizogyo": "seizo", "uranai": "uranai", "meguri": "uranai"}
     totals = {"analyzed": 0, "reported": 0, "generated_drafts": 0}
     failures = 0
     email_reports = []  # アカウントごとに個別送信するレポート [{account,label,html,filename}]

@@ -12,6 +12,7 @@ import random
 
 from threads_poster.schedule import (
     daily_slots_minutes,
+    daily_slots_windows,
     build_schedule,
     _random_times_with_min_gap,
     PRESETS,
@@ -174,6 +175,35 @@ def test_build_schedule_uranai_preset():
     print("  ✓ build_schedule（占いプリセット：午前1＋夕方-深夜3・最低間隔30分）OK")
 
 
+def test_meguri_windows_preset():
+    """澪プリセット：朝/昼/夕/夜の4窓に各1本・昇順・最低間隔30分・各窓内（200seed）。"""
+    WINS = [(6 * 60 + 30, 8 * 60 + 30), (11 * 60 + 30, 13 * 60),
+            (17 * 60, 19 * 60), (21 * 60, 23 * 60)]
+    for seed in range(200):
+        slots = daily_slots_windows(random.Random(seed), WINS, min_gap_min=30)
+        assert len(slots) == 4, (seed, slots)
+        assert slots == sorted(slots), (seed, slots)
+        for (s, e), t in zip(WINS, slots):
+            assert s <= t <= e, (seed, slots)           # 各窓内
+        for a, b in zip(slots, slots[1:]):
+            assert b - a >= 30, (seed, slots)            # 最低間隔（窓が離れてるので自動的に満たす）
+    print("  ✓ daily_slots_windows（澪：朝昼夕夜4窓・各1本・窓内・最低間隔）OK")
+
+
+def test_build_schedule_meguri_via_preset():
+    """build_schedule が PRESETS['meguri']（windows）を使い1日4本（朝昼夕夜）を出す。"""
+    from collections import Counter
+    now = datetime(2026, 6, 27, 6, 0, tzinfo=JST)
+    out = build_schedule(days=2, start_date=now, tz=JST, rng=random.Random(5),
+                         start_offset_days=0, **PRESETS["meguri"])
+    days = Counter(s.split(" ")[0] for s in out)
+    assert days["2026-06-27"] == 4 and days["2026-06-28"] == 4, days
+    # 朝(6:30-8:30)が必ず先頭に来る
+    m0 = _minutes_of([s for s in out if s.startswith("2026-06-27")][0])
+    assert 6 * 60 + 30 <= m0 <= 8 * 60 + 30, m0
+    print("  ✓ build_schedule（澪preset・windows経由で1日4本＝朝昼夕夜）OK")
+
+
 if __name__ == "__main__":
     print("=== スケジューラ テスト ===")
     test_min_gap_helper_exact_fit()
@@ -187,4 +217,6 @@ if __name__ == "__main__":
     test_build_schedule_deterministic()
     test_build_schedule_days_mode_start_today_skips_past()
     test_build_schedule_uranai_preset()
+    test_meguri_windows_preset()
+    test_build_schedule_meguri_via_preset()
     print("========== 全テスト PASS ==========")

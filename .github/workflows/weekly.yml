@@ -41,6 +41,7 @@ jobs:
           # 個別に上書きしたいときだけ Variable で設定。
           GEN_POSTS_SEIZOGYO: ${{ vars.GEN_POSTS_SEIZOGYO || '12' }}
           GEN_POSTS_URANAI: ${{ vars.GEN_POSTS_URANAI || '12' }}
+          GEN_POSTS_MEGURI: ${{ vars.GEN_POSTS_MEGURI || '12' }}
           GEN_MODEL: ${{ vars.GEN_MODEL || 'claude-opus-4-8' }}
           # キルスイッチ: Variable PAUSED=1 で生成・投稿を即停止。
           PAUSED: ${{ vars.PAUSED || '0' }}
