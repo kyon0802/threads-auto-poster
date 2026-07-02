@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """在庫の投稿本文を「1日4投稿×N日」のランダムスケジュールに割り当てて予約する。
 
-製造業/占いで時間帯プリセットが異なる:
+時間帯プリセットは threads_poster/schedule.py の PRESETS が正本（事業ごとに異なる）:
   - seizogyo（製造業）：昼12:00前後に1本＋夜18:00-23:00に3本（最低間隔30分・ランダム）
-  - uranai（占い）  ：午前(8:00-11:30)に1本＋夕方-深夜17:00-23:59に3本（同上）
+  - uranai（占い「結」）：午前(8:00-11:30)に1本＋夕方-深夜17:00-23:59に3本（同上）
+  - meguri（占い「澪」）：朝/昼/夕/夜の4窓に各1本（windows型）
 
 コンテンツ選択：本文があり status が queued / 空 /（任意で draft）の行を、
 queued→空→draft の優先順で N*4 本まで採用し、post_datetime を新規ランダム割当＋status=queued。
@@ -38,14 +39,11 @@ def content_issues(text: str, ng: list[str]) -> list[str]:
             issues.append(f"未確定プレースホルダ「{ch}」")
     return issues
 
-PRESETS = {
-    "seizogyo": dict(noon_center_min=12 * 60, noon_jitter_min=30,
-                     evening_start_min=18 * 60, evening_end_min=23 * 60,
-                     evening_count=3, min_gap_min=30),
-    "uranai": dict(noon_center_min=9 * 60 + 45, noon_jitter_min=105,        # 午前 8:00-11:30
-                   evening_start_min=17 * 60, evening_end_min=23 * 60 + 59,  # 夕方-23:59
-                   evening_count=3, min_gap_min=30),
-}
+def preset_posts_per_day(daily: dict) -> int:
+    """プリセットの1日あたり投稿数。windows型（meguri）は窓数、昼夜型は昼1＋夜N。"""
+    if "windows" in daily:
+        return len(daily["windows"])
+    return 1 + daily["evening_count"]
 
 
 def main() -> int:
@@ -66,7 +64,7 @@ def main() -> int:
     args = ap.parse_args()
 
     daily = PRESETS[args.preset]
-    per_day = 1 + daily["evening_count"]
+    per_day = preset_posts_per_day(daily)
     sa_info = json.load(open(args.sa, encoding="utf-8"))
     tz = ZoneInfo(args.tz)
     now = datetime.now(tz)
@@ -80,6 +78,22 @@ def main() -> int:
     rank = {"queued": 0, "": 1, "draft": 2}
     raw_pool = [p for p in posts if str(p.get("text") or "").strip()
                 and str(p.get("status") or "").lower() in allowed]
+    # ★cronレース対策（§16と同型の事故防止）: 公開時刻が既に到来している queued/空 の行は、
+    # 稼働中の10分cronがまさに公開しうる＝ここで status/日時を書くと posted の巻き戻し→二重投稿になる。
+    # 在庫からは除外し、未来時刻（または日時未設定）の行だけを並べ替え対象にする。
+    def _due_now(p) -> bool:
+        s = str(p.get("post_datetime") or "").strip().replace("/", "-")
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(s, fmt).replace(tzinfo=tz) <= now
+            except ValueError:
+                continue
+        return False  # 日時なし/不正 = cron の公開対象ではないので在庫にしてよい
+    racing = [p for p in raw_pool if str(p.get("status") or "").lower() in ("queued", "") and _due_now(p)]
+    if racing:
+        print(f"除外（公開時刻到来済み＝cronとレースするため触らない）{len(racing)}本: "
+              + ", ".join(str(p.get("row_id")) for p in racing))
+        raw_pool = [p for p in raw_pool if p not in racing]
     # コンプラ/プレースホルダで不適格な在庫は除外（自動公開させない＝BAN対策）。
     pool, skipped = [], []
     for p in raw_pool:

@@ -153,7 +153,7 @@ def make_anthropic_generate_fn(model: str = DEFAULT_MODEL, n: int = 5):
     def fn(prompt: str) -> list[str]:
         import anthropic
         client = anthropic.Anthropic()
-        # 本数に比例して出力上限を確保。1投稿は最大500字許容（build_prompt）なので、
+        # 本数に比例して出力上限を確保。1投稿は基本150字前後・最大250字（THREADS_HOOK_RULES）だが、
         # 28本でも切れないよう保守的に 1本=800token 見込みで確保（28本→22,400）。
         max_tokens = min(60000, max(8000, 800 * n))
         resp = client.messages.create(

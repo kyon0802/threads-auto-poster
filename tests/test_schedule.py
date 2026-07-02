@@ -6,6 +6,12 @@
   - 夜は 18:00〜23:00 にランダムで3本
   - 投稿どうしの最低間隔は30分（ただし30分等間隔ではなくランダム配置）
 """
+import os
+import sys
+
+# リポジトリルートを import パスに追加（tests/ からの直実行・pytest 両対応）
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import random

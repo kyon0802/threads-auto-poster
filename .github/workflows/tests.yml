@@ -1,0 +1,26 @@
+name: tests
+
+# push / PR のたびに全テストを実行する（API不要のモックのみ・秘密情報は使わない）。
+# 本番の投稿(post.yml)・収集(collect.yml)・週次(weekly.yml)とは完全に独立した検証専用ワークフロー。
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # 本番(post.yml等)と同じバージョンで検証する
+
+      - name: Install deps
+        run: pip install -r requirements.txt pytest
+
+      - name: Run test suite
+        run: python -m pytest tests/ -q

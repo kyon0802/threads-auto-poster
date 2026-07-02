@@ -1,4 +1,10 @@
 """Phase 2（analyzer / compliance / generator）のロジック検証。実行: python3 test_phase2.py"""
+import os
+import sys
+
+# リポジトリルートを import パスに追加（tests/ からの直実行・pytest 両対応）
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from datetime import datetime
 from zoneinfo import ZoneInfo
 

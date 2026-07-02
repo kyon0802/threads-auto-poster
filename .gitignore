@@ -12,3 +12,7 @@ __pycache__/
 .venv/
 venv/
 .DS_Store
+
+# 実行時生成物
+reports/
+.pytest_cache/

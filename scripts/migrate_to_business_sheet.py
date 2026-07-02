@@ -62,13 +62,25 @@ def ensure_tab(sh, title: str, ncols: int, nrows: int):
 
 
 def write_block(sh, ws, headers: list[str], internal_order: list[str], records: list[dict]) -> int:
-    """ヘッダ＋データ行を RAW(文字列) で書く。clear してから書くので冪等（全置換）。"""
+    """ヘッダ＋データ行を RAW(文字列) で全置換する（冪等）。
+
+    旧実装の「clear()→書込」は、clear 後に書込が失敗（グリッド超過・一過性APIエラー等）すると
+    移管先タブが**空のまま残る**（posted 履歴＝二重投稿防止の生命線が消える）ため、
+    ①グリッド拡張 → ②A1から上書き → ③余剰行の範囲だけクリア の順にする。
+    どの時点で失敗してもタブが空にはならない（最悪でも旧データが下に残るだけ＝再実行で解消）。"""
+    from gspread.utils import rowcol_to_a1
+
     rows = [headers] + [[s(r.get(k, "")) for k in internal_order] for r in records]
-    ws.clear()
+    nrows, ncols = len(rows), len(headers)
+    total_rows, total_cols = max(ws.row_count, nrows), max(ws.col_count, ncols)
+    if ws.row_count < nrows or ws.col_count < ncols:
+        ws.resize(rows=total_rows, cols=total_cols)
     sh.values_update(f"'{ws.title}'!A1",
                      params={"valueInputOption": "RAW"},
                      body={"values": rows})
-    return len(rows) - 1  # データ行数
+    if total_rows > nrows:  # 前回より行数が減った場合の残骸を消す（値のみクリア）
+        ws.batch_clear([f"A{nrows + 1}:{rowcol_to_a1(total_rows, total_cols)}"])
+    return nrows - 1  # データ行数
 
 
 def main() -> int:

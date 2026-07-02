@@ -42,7 +42,7 @@ def main() -> int:
     import gspread
     from google.oauth2.service_account import Credentials
 
-    with open(os.path.expanduser(args.file)) as f:
+    with open(os.path.expanduser(args.file), encoding="utf-8") as f:  # locale非依存（cron等でも安全）
         text = f.read()
     chunks = [text[i:i + CHUNK] for i in range(0, len(text), CHUNK)] or [""]
 

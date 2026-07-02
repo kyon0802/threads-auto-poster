@@ -109,13 +109,16 @@ python bootstrap_token.py <短期トークン>
 ## ファイル構成
 
 ```
-main.py                       実行エントリ
+main.py                       投稿エントリ（10分おき cron）
+main_collect.py               インサイト収集エントリ（日次・読み取り専用）
+main_weekly.py                分析→レポート→AI生成エントリ（3日サイクル）
 bootstrap_token.py            初回トークン取得
-threads_poster/
-  threads_api.py              Threads API クライアント
-  sheets.py                   スプレッドシート連携 + テスト用モック
-  publisher.py                公開ロジック（時刻判定/ツリー/レート制限/トークン更新）
-test_logic.py                 ロジック検証テスト（API不要）
-.github/workflows/post.yml    10分おき cron
+threads_poster/               コアパッケージ（API/シート/公開/収集/分析/生成/レポート/メール）
+scripts/                      セットアップ・移行・運用ツール（ローカル実行）
+tests/                        テスト一式（API不要のモック・pytest/直実行両対応）
+docs/CHANGELOG.md             改修履歴
+.github/workflows/            post.yml / collect.yml / weekly.yml / tests.yml
 requirements.txt / .env.example
 ```
+
+詳細なファイル構成と運用ルールは `CLAUDE.md` を参照。テストは `python3 -m pytest tests/ -q`。

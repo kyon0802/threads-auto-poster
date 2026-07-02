@@ -134,10 +134,11 @@ class Publisher:
 
         # row_id -> posted_id の既知マップ（ツリー親解決用）。
         # 投稿IDが数値だけ（例 1, 2）でもツリーが壊れないよう、キーは常に str に正規化する。
+        # status は is_due と同じく小文字化して比較（人が「Posted」等と書いても親解決が壊れないように）。
         posted_ids = {
             str(p["row_id"]): p.get("posted_id")
             for p in posts
-            if str(p.get("status")) == "posted" and p.get("posted_id")
+            if str(p.get("status") or "").lower() == "posted" and p.get("posted_id")
         }
         # アカウント別の本日カウント
         counts = {name: self._daily_count(acc, today) for name, acc in accounts.items()}

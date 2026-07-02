@@ -79,7 +79,9 @@ def upsert(ws, aliases: dict, key_internal: str, key_val: str, fields: dict) -> 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--token-file", required=True)
-    ap.add_argument("--account", default="takumi_kojo_navi")
+    # 既定値は置かない: 付け忘れが既定アカウント（本番）の user_id/トークンを別人の値で
+    # 上書きする事故になるため、必ず明示させる。
+    ap.add_argument("--account", required=True)
     ap.add_argument("--add-test-post", action="store_true")
     args = ap.parse_args()
 
@@ -115,7 +117,7 @@ def main() -> int:
     ws_a = sh.worksheet("accounts")
 
     now = datetime.now(ZoneInfo("Asia/Tokyo"))
-    acct = args.account or username or "takumi_kojo_navi"
+    acct = args.account
 
     # 3) accounts 追記/更新
     how = upsert(ws_a, ACCOUNTS_FIELD_ALIASES, "account", acct, {
@@ -143,8 +145,11 @@ def main() -> int:
                     f"`python3 scripts/setup_post_tab.py --account {acct}` でタブ『{post_tab}』を作成してください。"
                 )
         dt = (now - timedelta(minutes=2)).strftime("%Y-%m-%d %H:%M")
-        how_p = upsert(ws_p, POSTS_FIELD_ALIASES, "row_id", "T1", {
-            "row_id": "T1",
+        # row_id は「全タブで一意」が必須要件（CLAUDE.md §5）。固定 "T1" だと複数アカで重複し
+        # 書き戻しが別アカの行に着地しうるため、アカウント名を含めて一意にする。
+        test_row_id = f"T1-{acct}"
+        how_p = upsert(ws_p, POSTS_FIELD_ALIASES, "row_id", test_row_id, {
+            "row_id": test_row_id,
             "account": acct,
             "post_datetime": dt,
             "text": "接続テスト：自動投稿システムの疎通確認です。確認後に削除します。",
@@ -157,7 +162,8 @@ def main() -> int:
             "posted_at": "",
             "error": "",
         })
-        print(f"OK posts {how_p}  row_id=T1  post_datetime={dt}（JST・2分前=即時公開対象）")
+        print(f"OK posts {how_p}  row_id={test_row_id}  post_datetime={dt}"
+              f"（JST・2分前=即時公開対象。稼働中の10分cronが実投稿する点に注意）")
 
     return 0
 

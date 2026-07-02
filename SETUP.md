@@ -28,11 +28,11 @@ App Reviewは「他人のアカウントを代理運用 / システムを第三�
 
 - [x] コードを作業ディレクトリへ展開
 - [x] `pip3 install -r requirements.txt`
-- [x] `python3 test_logic.py` 全PASS（ツリー連結・時刻判定・レート制限・保留・冪等性）
+- [x] `python3 -m pytest tests/ -q` 全PASS（ツリー連結・時刻判定・レート制限・保留・冪等性）
 
 ローカル検証コマンド:
 ```bash
-python3 test_logic.py            # ロジック検証（API不要）
+python3 -m pytest tests/ -q      # ロジック検証（API不要・40本）
 DRY_RUN=1 python3 main.py        # 実投稿せず疎通確認（要 Phase A/B/C の環境変数）
 ```
 

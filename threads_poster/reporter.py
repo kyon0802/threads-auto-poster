@@ -45,7 +45,6 @@ def build_report(account: str, a: dict, gen_date: str) -> dict:
 
     top_lines = []
     for i, t in enumerate(a["top"], 1):
-        body = ""
         top_lines.append(f"{i}. 表示{t['views']}・ER{t['engagement_rate']}・{t['text_len']}字 ({t['post_datetime']})")
     top_str = " | ".join(top_lines)
 

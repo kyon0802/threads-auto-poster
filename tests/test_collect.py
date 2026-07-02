@@ -2,6 +2,12 @@
 
 prior art: test_logic.py（FakeClient / MemoryStore / now_fn 注入で「外部挙動のみ」を検証）。
 """
+import os
+import sys
+
+# リポジトリルートを import パスに追加（tests/ からの直実行・pytest 両対応）
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
