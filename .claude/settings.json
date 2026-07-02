@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v rtk >/dev/null 2>&1 || curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh >/dev/null 2>&1 || true",
+            "timeout": 120,
+            "statusMessage": "rtk をセットアップ中..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PATH=\"$HOME/.local/bin:$PATH\"; command -v rtk >/dev/null 2>&1 && rtk hook claude || true"
+          }
+        ]
+      }
+    ]
+  }
+}
