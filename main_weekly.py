@@ -180,10 +180,16 @@ def main() -> int:
                 if generate:
                     schedule_fn = SCHEDULE_FN_BY_BUSINESS.get(name)
                     acc_n_posts = n_posts_for(name, os.environ, n_posts)
-                    res = Generator(store, acc, n_posts=acc_n_posts, model=gen_model,
-                                    status=gen_status, schedule_fn=schedule_fn).run(analysis)
-                    totals["generated_drafts"] += len(res["written"])
-                    log.info("%s: %s %d本投入 / 破棄 %d本", acc, gen_status, len(res["written"]), len(res["rejected"]))
+                    # GEN_POSTS_<NAME>=0 ＝ その事業だけ生成オフ（立ち上げ期の手動運用と自動生成の
+                    # 二重投稿を防ぐ per-business スイッチ。分析・レポートは通常どおり実施）。
+                    if acc_n_posts <= 0:
+                        log.info("%s: GEN_POSTS_%s=0 → 生成スキップ（分析・レポートは実施）",
+                                 acc, name.upper())
+                    else:
+                        res = Generator(store, acc, n_posts=acc_n_posts, model=gen_model,
+                                        status=gen_status, schedule_fn=schedule_fn).run(analysis)
+                        totals["generated_drafts"] += len(res["written"])
+                        log.info("%s: %s %d本投入 / 破棄 %d本", acc, gen_status, len(res["written"]), len(res["rejected"]))
                 # 投稿タブを投稿日時の降順に整える（新しい日付が上）。生成で追記した行も上に来る。
                 store.sort_posts_tab(acc, descending=True)
             except GeneratorError as e:  # 必須タブ未整備（§17e）→ そのアカだけ失敗扱い
