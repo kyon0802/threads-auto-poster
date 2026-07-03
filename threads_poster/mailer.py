@@ -52,15 +52,23 @@ def _ssl_context() -> ssl.SSLContext:
         return ssl.create_default_context()
 
 
+def _envelope_recipients(to: str) -> list[str]:
+    """To ヘッダ（カンマ区切りで複数可）を SMTP エンベロープの宛先リストに分解する。
+    ヘッダ側は "a@x, b@y" のままで正しく表示され、実際の配送先は各アドレスへ個別に届く。
+    "a@x, b@y" を [a@x] の1件として渡すと不正な単一RCPTになり配送されないため必ず分解する。"""
+    return [addr.strip() for addr in to.split(",") if addr.strip()]
+
+
 def send_message(user: str, password: str, msg: MIMEMultipart,
                  host: str = "smtp.gmail.com", port: int = 465, smtp_factory=None) -> None:
-    """msg を SMTP(SSL) で送る。smtp_factory(host, port) を注入すればテストで差し替え可能。"""
-    to = msg["To"]
+    """msg を SMTP(SSL) で送る。smtp_factory(host, port) を注入すればテストで差し替え可能。
+    To ヘッダが複数アドレス（カンマ区切り）なら全員に配送する。"""
+    recipients = _envelope_recipients(msg["To"])
     if smtp_factory is not None:
         client = smtp_factory(host, port)
         try:  # login/sendmail が例外でも必ず接続を閉じる（実SMTPの with と同じ保証）
             client.login(user, password)
-            client.sendmail(user, [to], msg.as_string())
+            client.sendmail(user, recipients, msg.as_string())
         finally:
             close = getattr(client, "quit", None) or getattr(client, "close", None)
             if close:
@@ -68,7 +76,7 @@ def send_message(user: str, password: str, msg: MIMEMultipart,
         return
     with smtplib.SMTP_SSL(host, port, context=_ssl_context()) as s:
         s.login(user, password)
-        s.sendmail(user, [to], msg.as_string())
+        s.sendmail(user, recipients, msg.as_string())
 
 
 def send_html(user: str, password: str, sender: str, to: str, subject: str, html: str,

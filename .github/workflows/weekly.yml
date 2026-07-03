@@ -42,6 +42,9 @@ jobs:
           GEN_POSTS_SEIZOGYO: ${{ vars.GEN_POSTS_SEIZOGYO || '12' }}
           GEN_POSTS_URANAI: ${{ vars.GEN_POSTS_URANAI || '12' }}
           GEN_POSTS_MEGURI: ${{ vars.GEN_POSTS_MEGURI || '12' }}
+          # seizogyo2（製造業・共感認知型）は立ち上げ期は手動R1バッチ運用のため既定0＝生成オフ
+          # （手動投稿と自動生成の二重投稿を防ぐ）。自動生成を始めるときに Variable を 12 にする。
+          GEN_POSTS_SEIZOGYO2: ${{ vars.GEN_POSTS_SEIZOGYO2 || '0' }}
           GEN_MODEL: ${{ vars.GEN_MODEL || 'claude-opus-4-8' }}
           # キルスイッチ: Variable PAUSED=1 で生成・投稿を即停止。
           PAUSED: ${{ vars.PAUSED || '0' }}
@@ -55,5 +58,11 @@ jobs:
           EMAIL_BUSINESSES: ${{ vars.EMAIL_BUSINESSES || '' }}
           MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
           MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          # MAIL_TO＝全事業共通の既定宛先。MAIL_TO_<NAME> を設定するとその事業だけ宛先を差し替える
+          # （事業別レポート配布。例：seizogyo2 だけ担当者にも配る）。空なら既定にフォールバック。
           MAIL_TO: ${{ vars.MAIL_TO || secrets.MAIL_USERNAME }}
+          MAIL_TO_SEIZOGYO: ${{ vars.MAIL_TO_SEIZOGYO || '' }}
+          MAIL_TO_URANAI: ${{ vars.MAIL_TO_URANAI || '' }}
+          MAIL_TO_MEGURI: ${{ vars.MAIL_TO_MEGURI || '' }}
+          MAIL_TO_SEIZOGYO2: ${{ vars.MAIL_TO_SEIZOGYO2 || '' }}
         run: python main_weekly.py

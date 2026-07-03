@@ -56,16 +56,20 @@ def send_account_reports(reports: list[dict], *, user: str, password: str, to: s
     """アカウントごとに1通ずつ個別メールを送る。(送信成功数, 失敗数) を返す。
     reports=[{account,label,html,filename}]。send_fn は注入可（テスト用）。"""
     send_fn = send_fn or send_html
+    log = logging.getLogger("main_weekly")
     sender = f"Threads週次レポート <{user}>"
     sent = failed = 0
     for rep in reports:
+        # 宛先はレポート個別の to（事業別ルーティング）があればそれ、無ければ共通の to。
+        rcpt = rep.get("to") or to
         subject = f"【Threads週次】{rep['label']}｜{rep['account']}" + (f"（{gen_date}）" if gen_date else "")
         try:
-            send_fn(user, password, sender, to, subject, rep["html"], attachment_name=rep.get("filename"))
+            send_fn(user, password, sender, rcpt, subject, rep["html"], attachment_name=rep.get("filename"))
             sent += 1
+            log.info("メール送信OK: %s → %s", rep.get("account"), rcpt)
         except Exception:  # noqa: BLE001 1通の失敗で他アカの送信は止めない
             failed += 1
-            logging.getLogger("main_weekly").exception("メール送信失敗: %s", rep.get("account"))
+            log.exception("メール送信失敗: %s", rep.get("account"))
     return sent, failed
 
 
@@ -102,6 +106,14 @@ def n_posts_for(name: str, env, default_n: int) -> int:
     if name in SCHEDULE_FN_BY_BUSINESS:
         return int(env.get(f"GEN_POSTS_{name.upper()}", str(CYCLE_DAYS * POSTS_PER_DAY)))
     return default_n
+
+
+def recipients_for(name: str, env, default_to: str) -> str:
+    """事業ごとの週次レポート宛先。Variable `MAIL_TO_<NAME>`（カンマ区切りで複数可）が
+    あればそれを使い、無ければ default_to（`MAIL_TO`＝全事業共通の既定宛先）。
+    例：MAIL_TO=morll（全事業）＋ MAIL_TO_SEIZOGYO2="morll, toshi" で seizogyo2 だけ toshi にも配る。
+    宛先は mailer 側でカンマ分解して全員に配送される。"""
+    return env.get(f"MAIL_TO_{name.upper()}", "").strip() or default_to
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 log = logging.getLogger("main_weekly")
@@ -174,9 +186,9 @@ def main() -> int:
                     html = build_html(acc, analysis, gen_date, theme=theme, title=acc, strategy=strategy)
                     with open(os.path.join(reports_dir, fname), "w", encoding="utf-8") as f:
                         f.write(html)
-                    # アカウントごとに1通ずつ送るため、ここで個別に貯める
+                    # アカウントごとに1通ずつ送るため、ここで個別に貯める（business＝宛先ルーティング用）
                     email_reports.append({"account": acc, "label": BIZ_LABEL.get(name, name),
-                                          "html": html, "filename": fname})
+                                          "business": name, "html": html, "filename": fname})
                 if generate:
                     schedule_fn = SCHEDULE_FN_BY_BUSINESS.get(name)
                     acc_n_posts = n_posts_for(name, os.environ, n_posts)
@@ -204,12 +216,15 @@ def main() -> int:
     mail_user = os.environ.get("MAIL_USERNAME")
     mail_pw = os.environ.get("MAIL_PASSWORD")
     mail_to = os.environ.get("MAIL_TO") or mail_user
+    # 事業別の宛先ルーティング：既定(mail_to)＝全事業。MAIL_TO_<NAME> があればその事業だけ差し替え。
+    for rep in email_reports:
+        rep["to"] = recipients_for(rep["business"], os.environ, mail_to)
     if enable_email and email_reports:
         if mail_user and mail_pw:
             sent, mail_failed = send_account_reports(
                 email_reports, user=mail_user, password=mail_pw, to=mail_to, gen_date=gen_date)
             failures += mail_failed
-            log.info("メール送信: %d通成功 / %d通失敗 (宛先 %s)", sent, mail_failed, mail_to)
+            log.info("メール送信: %d通成功 / %d通失敗 (既定宛先 %s・事業別はMAIL_TO_<NAME>)", sent, mail_failed, mail_to)
         else:
             # ENABLE_EMAIL=1 なのに認証情報が無い＝設定ミス。静かに緑にせず失敗扱いで気づけるようにする。
             failures += 1

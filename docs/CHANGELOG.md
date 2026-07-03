@@ -203,3 +203,14 @@ PRD #2 の Phase 2 を実装。実績→分析→レポート→AI生成→**機
 - **戦略・投稿のローカル正本**：`製造業Threads/02_新運用_共感認知2アカ/`（設計＝`strategy/00_戦略設計_共感認知型.md`・R1立ち上げ12本は Workflow「型抽出→起草→3視点敵対的検証→修正」で制作）。コンプラ正本は 01 を参照（複製しない）。同時に旧 `02_過去案件_リライズupS_アーカイブ` フォルダを `09_アーカイブ_過去案件_リライズupS` へ改名（新運用に02番を割当）。
 - **テスト**：`test_schedule.py` に seizogyo2 窓検証（200seed）＋ build_schedule×preset の2件追加（40→42本・全PASS）。
 - **アカウントキー `tenshokuman`**（タブ=`投稿_tenshokuman` 等・手動row_id接頭辞 `ten-`）。user_id等の実データはシートとローカル `02_.../data/システム接続情報.md` のみ（公開repoに書かない）。
+
+### 26追補（2026-07-03）住田R1公開＋メール複数宛先＋二重投稿防止
+- **メール複数宛先対応**：`mailer.send_message` が To をカンマ分解して SMTP エンベロープに全員渡すよう修正（従来は `[to]` 1件＝複数指定時に不達）。`_envelope_recipients` 追加＋テスト（test_phase2 43本）。Variable `MAIL_TO` にカンマ区切りで複数宛先を設定可能に（**宛先の実アドレスは Variable 側にのみ置き、公開repoには書かない**＝§17b）。
+- **二重投稿防止の穴を修正**：`weekly.yml` に `GEN_POSTS_SEIZOGYO2`（既定 `0`＝生成オフ）を配線。未配線だと n_posts_for が既定12に落ちて立ち上げ期に自動生成が走り手動R1と衝突していた。`main_weekly` は `GEN_POSTS_<NAME>=0` で当該事業の生成をスキップ（分析・レポートは継続）。
+- **住田R1公開GO**：立ち上げ12本を **queued** 化（07-04〜07-09・1日2本）。ハッシュタグは全削除（見本準拠・広告色低減）。自動生成を始めるときは Variable `GEN_POSTS_SEIZOGYO2` を 12 にする。
+
+### 26追補2（2026-07-03）週次レポートの事業別宛先ルーティング
+- **要件**：既定宛先＝全事業のレポート／別の宛先＝seizogyo2（住田＋今後の2アカ目）のみに追加配布。
+- **実装**：`main_weekly.recipients_for(name, env, default_to)`＝`MAIL_TO_<NAME>` があればその事業だけ宛先差し替え、無ければ既定 `MAIL_TO`。email_reports に `business` を付与し送信直前に `rep["to"]` を解決。`send_account_reports` は `rep["to"]` 優先＋per-report宛先ログ。weekly.yml に `MAIL_TO_SEIZOGYO/URANAI/MEGURI/SEIZOGYO2` を配線。
+- **設定**：Variable `MAIL_TO`（全事業既定）＋`MAIL_TO_SEIZOGYO2`（seizogyo2のみ別宛先を追加）。他事業（seizogyo/uranai）に別宛先は漏れない（テストで担保）。**宛先の実アドレスは Variable 側にのみ置き、公開repoには書かない**（§17b）。
+- テスト2件追加（recipients_for のルーティング＋漏れなし／send_account_reports の per-report宛先）＝45本全PASS。

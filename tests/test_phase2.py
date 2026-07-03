@@ -275,6 +275,57 @@ def test_mailer_closes_connection_on_failure():
     print("  ✓ mailer 送信失敗時も接続を閉じる（try/finally）OK")
 
 
+def test_mailer_multiple_recipients():
+    """To が複数アドレス（カンマ区切り）なら SMTP エンベロープに全員が渡る。"""
+    from threads_poster.mailer import send_message, build_message, _envelope_recipients
+    assert _envelope_recipients("a@x.com, b@y.com") == ["a@x.com", "b@y.com"]
+    assert _envelope_recipients("solo@x.com") == ["solo@x.com"]
+    captured = {}
+    class FakeSMTP:
+        def __init__(self, host, port): pass
+        def login(self, u, p): pass
+        def sendmail(self, frm, to, body): captured["to"] = to
+        def quit(self): pass
+    msg = build_message("f@example.com", "a@example.com, b@example.org", "s", "<b>x</b>")
+    send_message("u", "p", msg, smtp_factory=lambda h, port: FakeSMTP(h, port))
+    assert captured["to"] == ["a@example.com", "b@example.org"], captured
+    print("  ✓ mailer 複数宛先を全員に配送（カンマ区切り分解）OK")
+
+
+def test_recipients_for_per_business_routing():
+    """事業別宛先ルーティング：MAIL_TO_<NAME> があればその事業だけ差し替え、無ければ既定。"""
+    from main_weekly import recipients_for
+    env = {"MAIL_TO_SEIZOGYO2": "morll@x.com, toshi@y.com"}
+    # seizogyo2 だけ差し替え（morll＋toshi）
+    assert recipients_for("seizogyo2", env, "morll@x.com") == "morll@x.com, toshi@y.com"
+    # 他事業は既定（morll のみ）＝toshi に他事業は漏れない
+    assert recipients_for("seizogyo", env, "morll@x.com") == "morll@x.com"
+    assert recipients_for("uranai", env, "morll@x.com") == "morll@x.com"
+    # 空文字の上書き変数は既定にフォールバック
+    assert recipients_for("meguri", {"MAIL_TO_MEGURI": "  "}, "morll@x.com") == "morll@x.com"
+    print("  ✓ recipients_for（事業別ルーティング・他事業への漏れなし）OK")
+
+
+def test_send_account_reports_per_report_to():
+    """send_account_reports は rep['to'] を優先し、無ければ共通 to を使う（事業別配布）。"""
+    from main_weekly import send_account_reports
+    calls = []
+    def fake_send(user, pw, sender, to, subject, html, attachment_name=None):
+        calls.append((subject, to))
+    reports = [
+        {"account": "tenshokuman", "label": "製造業2", "html": "<b>x</b>",
+         "to": "morll@x.com, toshi@y.com"},
+        {"account": "takumi_kojo_navi", "label": "製造業", "html": "<b>y</b>"},  # to無し→既定
+    ]
+    sent, failed = send_account_reports(reports, user="u", password="p",
+                                        to="morll@x.com", send_fn=fake_send)
+    assert (sent, failed) == (2, 0), (sent, failed)
+    tos = {subj.split("｜")[1]: to for subj, to in calls}
+    assert tos["tenshokuman"] == "morll@x.com, toshi@y.com"   # 事業別で toshi にも
+    assert tos["takumi_kojo_navi"] == "morll@x.com"           # 既定＝morll のみ
+    print("  ✓ send_account_reports（rep['to']優先・既定フォールバック）OK")
+
+
 def test_cycle_gate_every_3_days():
     """3日サイクルゲート：起点(06-28)から3日ごとの日だけ True。間の日は False。"""
     from datetime import date
@@ -343,6 +394,9 @@ if __name__ == "__main__":
     test_sort_posts_tab_noop()
     test_mailer_build_message()
     test_mailer_closes_connection_on_failure()
+    test_mailer_multiple_recipients()
+    test_recipients_for_per_business_routing()
+    test_send_account_reports_per_report_to()
     test_cycle_gate_every_3_days()
     test_n_posts_for_4perday_businesses()
     test_uranai_schedule_fn_uses_morning_evening()
