@@ -91,6 +91,7 @@ SCHEDULE_FN_BY_BUSINESS = {
     "seizogyo": partial(build_schedule, **PRESETS["seizogyo"]),
     "uranai": partial(build_schedule, **PRESETS["uranai"]),
     "meguri": partial(build_schedule, **PRESETS["meguri"]),  # 占い「澪」＝朝昼夕夜の4窓
+    "seizogyo2": partial(build_schedule, **PRESETS["seizogyo2"]),  # 製造業・共感認知型＝生活リズム4窓
 }
 
 

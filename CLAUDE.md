@@ -43,9 +43,9 @@ GitHub Actions（すべて別systemの4本）
 ## 2. 現在の運用状態（2026-07-03時点）
 
 - **repo**: `kyon0802/threads-auto-poster`（**公開**・§17厳守）。gh CLI は `/opt/homebrew/bin/gh`（アカウント kyon0802）。
-- **稼働事業（Secret `BUSINESSES`）**: `seizogyo`（製造業・`takumi_kojo_navi`）／ `uranai`（占い「結」・`miko_yui_musubi`）。**3事業目 `meguri`（占い「澪」）はコード実装済み・BUSINESSES未登録＝inert**（起動残タスクは §7）。
+- **稼働事業（Secret `BUSINESSES`）**: `seizogyo`（製造業・`takumi_kojo_navi`）／ `uranai`（占い「結」・`miko_yui_musubi`）／ `seizogyo2`（製造業・共感認知型・`tenshokuman.15`＝アカウントキー `tenshokuman`。2026-07-03追加、詳細 docs/CHANGELOG.md §26）。**`meguri`（占い「澪」）はコード実装済み・BUSINESSES未登録＝inert**（起動残タスクは §7）。
 - **3日PDCAサイクル**: weekly.yml は毎日叩くが `is_cycle_day`（起点 2026-06-28・3日周期）の日だけ本処理。各サイクルで「翌日から3日×4本/日」を生成→隙間なく連続。手動実行は `FORCE_CYCLE=1`。
-- **投稿スケジュール**: 事業別プリセット（`schedule.PRESETS`）で1日4本・ランダム配置・最低間隔30分。seizogyo=昼1＋夜3／uranai=午前1＋夕方〜深夜3／meguri=朝昼夕夜の4窓。
+- **投稿スケジュール**: 事業別プリセット（`schedule.PRESETS`）で1日4本・ランダム配置・最低間隔30分。seizogyo=昼1＋夜3／uranai=午前1＋夕方〜深夜3／meguri=朝昼夕夜の4窓／seizogyo2=生活リズム4窓（朝通勤・昼休憩・夕帰宅・夜寝る前）。
 - **生成**: `GENERATE_POSTS=1`＋`ANTHROPIC_API_KEY`。`GEN_STATUS`=draft(人が確認)/queued(全自動公開)。生成前に必須タブゲート（§17e）、生成後に機械コンプラゲート。
 - **メール**: `ENABLE_EMAIL=1` でアカウントごとに週次レポートを個別送信（宛先 morll.0802@gmail.com・Gmailアプリパスワード）。run失敗時はGitHub純正の失敗通知メールも飛ぶ。
 - **テスト**: `python3 -m pytest tests/ -q`（40本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。

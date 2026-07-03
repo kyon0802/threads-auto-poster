@@ -189,3 +189,17 @@ PRD #2 の Phase 2 を実装。実績→分析→レポート→AI生成→**機
 - **専用スプレッドシート新規作成**（morll所有・IDは公開repoに書かない＝memory/scratchpadで管理＝§17b/§18）。タブ構築＋curation＋26投稿(draft在庫)投入は **scratchpad の `build_mio_sheet.py`**（SA共有後に `--apply`・冪等）。**SAへの共有がブロッカー**（claude.ai Drive MCP に権限付与APIが無く、ユーザー手動共有が必要）。
 - **コードは inert**：`meguri` を `BUSINESSES` secret に入れるまで何も動かない（=スカフォールディングのみ安全に commit）。**起動の残（HITL）**：①ユーザーが新Threadsアカ作成＋トークン取得（§15手順）②シートをSAに共有→`build_mio_sheet.py --apply`③accounts にトークン＋`BUSINESSES` に3事業目追加④初回サイクルを fill（`--preset meguri --start-today`）。暦の正確性（縁起日/節気の実データ参照）は今後の要対応事項。
 - **テスト**：`test_schedule.py` に `daily_slots_windows`（澪4窓・200seed）と build_schedule×meguri preset の2件追加。全スイートPASS。
+
+---
+
+## 26. 改修ログ（2026-07-03）4事業目＝製造業・共感認知型「住田」（seizogyo2）追加
+
+現行 `seizogyo`（たくみ/ナビ＝当事者キャラ×情報メディア）とは**別戦略**の製造業アカウント第2弾。コンセプト＝**「共感を軸にバズらせて認知拡大→後段で送客」**（keita共有の高消費回数スレッド群がモデル）。ポジション＝「住田｜製造業専門家」（ブルーカラー専門転職エージェントの専門家キャラ・@tenshokuman.15）。送客モデルは seizogyo と同一（提携紹介会社へ成果報酬）。
+
+- **事業キー `seizogyo2`**：`SCHEDULE_FN_BY_BUSINESS` に追加。`n_posts_for` は在籍で自動的に 3日×4＝12本（`GEN_POSTS_SEIZOGYO2` で上書き可）。
+- **スケジュール**：`PRESETS["seizogyo2"]`＝windows型（澪と同系統）。工場勤務者の生活リズム4窓＝朝6:30-8:30（通勤）／昼11:30-13:00（休憩）／夕17:30-20:00（帰宅後）／夜21:00-23:30（寝る前）に各1本・最低間隔30分。
+- **専用スプレッドシート「Threads運用｜製造業2」**（morll所有・IDは公開repoに書かない＝§17b）。SAはDriveクォータ0でファイル作成不可（Google仕様変更）→ Drive MCP でユーザー所有として作成し、**SAへの共有はユーザー手動**（§25の澪と同じブロッカー/解決）。
+- **ガイドライン タブは現行 seizogyo シートから複製**＝同じ製造業求人なので違反ライン（NGワード・法令・過去2回BANの教訓）を単一基準で共有。プロフィール/ナレッジは新アカ専用（共感認知型・専門家ポジション）。
+- **戦略・投稿のローカル正本**：`製造業Threads/02_新運用_共感認知2アカ/`（設計＝`strategy/00_戦略設計_共感認知型.md`・R1立ち上げ12本は Workflow「型抽出→起草→3視点敵対的検証→修正」で制作）。コンプラ正本は 01 を参照（複製しない）。同時に旧 `02_過去案件_リライズupS_アーカイブ` フォルダを `09_アーカイブ_過去案件_リライズupS` へ改名（新運用に02番を割当）。
+- **テスト**：`test_schedule.py` に seizogyo2 窓検証（200seed）＋ build_schedule×preset の2件追加（40→42本・全PASS）。
+- **アカウントキー `tenshokuman`**（タブ=`投稿_tenshokuman` 等・手動row_id接頭辞 `ten-`）。user_id等の実データはシートとローカル `02_.../data/システム接続情報.md` のみ（公開repoに書かない）。
