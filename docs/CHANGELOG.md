@@ -214,3 +214,11 @@ PRD #2 の Phase 2 を実装。実績→分析→レポート→AI生成→**機
 - **実装**：`main_weekly.recipients_for(name, env, default_to)`＝`MAIL_TO_<NAME>` があればその事業だけ宛先差し替え、無ければ既定 `MAIL_TO`。email_reports に `business` を付与し送信直前に `rep["to"]` を解決。`send_account_reports` は `rep["to"]` 優先＋per-report宛先ログ。weekly.yml に `MAIL_TO_SEIZOGYO/URANAI/MEGURI/SEIZOGYO2` を配線。
 - **設定**：Variable `MAIL_TO`（全事業既定）＋`MAIL_TO_SEIZOGYO2`（seizogyo2のみ別宛先を追加）。他事業（seizogyo/uranai）に別宛先は漏れない（テストで担保）。**宛先の実アドレスは Variable 側にのみ置き、公開repoには書かない**（§17b）。
 - テスト2件追加（recipients_for のルーティング＋漏れなし／send_account_reports の per-report宛先）＝45本全PASS。
+
+### 26追補3（2026-07-07）seizogyo2 に2アカ目 `pashi` 追加（本音暴露型・建設施工管理特化）
+- **アカ2＝ぱし|転職先生のホンネ（pashi_tenshokusensei）**を seizogyo2 事業に追加（同一シート・同一フォルダ `02_新運用_2アカ`）。アカ1住田(共感認知型)とは別軸＝**本音暴露/給料公開/逆張り議論**型・建設/施工管理派遣特化・既存266フォロワー＆公式LINEで相談送客。
+- セットアップ＝`setup_post_tab`/`add_validation_ja`/`setup_account`（accountsにトークン登録）＋`プロフィール_pashi`/`ナレッジ_pashi`（型ライブラリを sync_knowledge）。ガイドラインは共有（同シートの既存タブ）。
+- **R1 12本を Workflow（型抽出→起草→3視点敵対検証〈職安法/信用毀損差別/品質〉→修正・指摘9件反映critical0）で制作→機械ゲート12/12合格→queued**（07-08〜07-13・昼12:xx/夕18-19:xx）。**CIB分離**：住田=朝07:xx/夜23:xx、ぱし=昼/夕で3h以上ずらす。ハッシュタグなし。
+- pashi特有コンプラ＝実在派遣会社の名指し貶し・属性差別・具体求人化を検証で排除（既存の「洗脳しやすい」等の芸風は再生産せず、給料公開/逆張り/相談回答の合法な芸風に寄せた）。
+- 生成は引き続き `GEN_POSTS_SEIZOGYO2=0`（手動R1・二重投稿防止）。メール宛先は seizogyo2 の設定（既定＋別宛先）のまま＝実アドレスは Variable のみ（§17b）。エンジンのコード変更なし。
+- フォルダ名変更：`02_新運用_共感認知2アカ`→`02_新運用_2アカ`（2アカ体制の中立名）。
