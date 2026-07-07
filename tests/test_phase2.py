@@ -345,12 +345,14 @@ def test_n_posts_for_4perday_businesses():
     Variable GEN_POSTS_<NAME> で上書きできる。"""
     from main_weekly import n_posts_for, SCHEDULE_FN_BY_BUSINESS
     assert "seizogyo" in SCHEDULE_FN_BY_BUSINESS and "uranai" in SCHEDULE_FN_BY_BUSINESS
-    assert "seizogyo2" in SCHEDULE_FN_BY_BUSINESS
+    assert "seizogyo2" in SCHEDULE_FN_BY_BUSINESS and "seizogyo3" in SCHEDULE_FN_BY_BUSINESS
     assert n_posts_for("seizogyo", {}, 5) == 12
     assert n_posts_for("uranai", {}, 5) == 12
     assert n_posts_for("seizogyo2", {}, 5) == 12
+    assert n_posts_for("seizogyo3", {}, 5) == 12
     assert n_posts_for("uranai", {"GEN_POSTS_URANAI": "9"}, 5) == 9   # 上書き
     assert n_posts_for("seizogyo2", {"GEN_POSTS_SEIZOGYO2": "0"}, 5) == 0  # 0=生成オフ（mainでスキップ）
+    assert n_posts_for("seizogyo3", {"GEN_POSTS_SEIZOGYO3": "0"}, 5) == 0  # ぱしも立ち上げ期は0
     assert n_posts_for("other", {}, 5) == 5                           # 対象外は既定
     print("  ✓ n_posts_for（4本/日事業=12本・上書き可・0=生成オフ・他事業は既定）OK")
 

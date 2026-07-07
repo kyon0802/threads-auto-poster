@@ -210,20 +210,32 @@ def test_build_schedule_meguri_via_preset():
     print("  ✓ build_schedule（澪preset・windows経由で1日4本＝朝昼夕夜）OK")
 
 
-def test_seizogyo2_windows_preset():
-    """製造業2（共感認知型）プリセット：朝/昼/夕/夜の4窓に各1本・昇順・窓内・最低間隔30分（200seed）。"""
-    WINS = PRESETS["seizogyo2"]["windows"]
-    assert WINS == [(6 * 60 + 30, 8 * 60 + 30), (11 * 60 + 30, 13 * 60),
-                    (17 * 60 + 30, 20 * 60), (21 * 60, 23 * 60 + 30)], WINS
-    for seed in range(200):
-        slots = daily_slots_windows(random.Random(seed), WINS, min_gap_min=30)
-        assert len(slots) == 4, (seed, slots)
-        assert slots == sorted(slots), (seed, slots)
-        for (s, e), t in zip(WINS, slots):
-            assert s <= t <= e, (seed, slots)           # 各窓内
-        for a, b in zip(slots, slots[1:]):
-            assert b - a >= 30, (seed, slots)            # 最低間隔
-    print("  ✓ daily_slots_windows（製造業2：朝昼夕夜4窓・各1本・窓内・最低間隔）OK")
+def test_seizogyo2_and_3_windows_presets():
+    """製造業2（住田）/製造業3（ぱし）プリセット：各4窓・各1本・昇順・窓内・最低間隔30分（200seed）。"""
+    for name in ("seizogyo2", "seizogyo3"):
+        WINS = PRESETS[name]["windows"]
+        assert len(WINS) == 4, (name, WINS)
+        for seed in range(200):
+            slots = daily_slots_windows(random.Random(seed), WINS, min_gap_min=30)
+            assert len(slots) == 4, (name, seed, slots)
+            assert slots == sorted(slots), (name, seed, slots)
+            for (s, e), t in zip(WINS, slots):
+                assert s <= t <= e, (name, seed, slots)      # 各窓内
+            for a, b in zip(slots, slots[1:]):
+                assert b - a >= 30, (name, seed, slots)      # 最低間隔
+    print("  ✓ daily_slots_windows（製造業2/3：各4窓・窓内・最低間隔）OK")
+
+
+def test_seizogyo2_3_windows_do_not_overlap():
+    """★CIB担保：住田(seizogyo2)とぱし(seizogyo3)の投稿窓は一切重ならない
+    （同一運用者の2アカが同時刻帯に投稿するニアミスを構造的に防ぐ）。"""
+    a = sorted(PRESETS["seizogyo2"]["windows"])
+    b = sorted(PRESETS["seizogyo3"]["windows"])
+    for (s1, e1) in a:
+        for (s2, e2) in b:
+            # 2区間 [s1,e1] と [s2,e2] が重なる条件は s1<=e2 and s2<=e1。重ならないことを保証。
+            assert e1 < s2 or e2 < s1, f"窓が重複: 住田{(s1,e1)} と ぱし{(s2,e2)}"
+    print("  ✓ 製造業2/3の投稿窓は非重複（CIB配慮・アカごとにバラバラ）OK")
 
 
 def test_build_schedule_seizogyo2_via_preset():
@@ -234,10 +246,25 @@ def test_build_schedule_seizogyo2_via_preset():
                          start_offset_days=0, **PRESETS["seizogyo2"])
     days = Counter(s.split(" ")[0] for s in out)
     assert days["2026-07-03"] == 4 and days["2026-07-04"] == 4, days
-    # 朝(6:30-8:30)が必ず先頭に来る
+    # 朝の窓(6:30-8:00)が必ず先頭に来る
     m0 = _minutes_of([s for s in out if s.startswith("2026-07-03")][0])
-    assert 6 * 60 + 30 <= m0 <= 8 * 60 + 30, m0
-    print("  ✓ build_schedule（製造業2preset・windows経由で1日4本＝朝昼夕夜）OK")
+    lo, hi = PRESETS["seizogyo2"]["windows"][0]
+    assert lo <= m0 <= hi, m0
+    print("  ✓ build_schedule（製造業2preset・windows経由で1日4本）OK")
+
+
+def test_build_schedule_seizogyo3_via_preset():
+    """build_schedule が PRESETS['seizogyo3']（windows）を使い1日4本（ぱし・昼夕寄り）を出す。"""
+    from collections import Counter
+    now = datetime(2026, 7, 8, 6, 0, tzinfo=JST)
+    out = build_schedule(days=2, start_date=now, tz=JST, rng=random.Random(3),
+                         start_offset_days=0, **PRESETS["seizogyo3"])
+    days = Counter(s.split(" ")[0] for s in out)
+    assert days["2026-07-08"] == 4 and days["2026-07-09"] == 4, days
+    m0 = _minutes_of([s for s in out if s.startswith("2026-07-08")][0])
+    lo, hi = PRESETS["seizogyo3"]["windows"][0]
+    assert lo <= m0 <= hi, m0
+    print("  ✓ build_schedule（製造業3preset・windows経由で1日4本）OK")
 
 
 if __name__ == "__main__":
@@ -255,6 +282,8 @@ if __name__ == "__main__":
     test_build_schedule_uranai_preset()
     test_meguri_windows_preset()
     test_build_schedule_meguri_via_preset()
-    test_seizogyo2_windows_preset()
+    test_seizogyo2_and_3_windows_presets()
+    test_seizogyo2_3_windows_do_not_overlap()
     test_build_schedule_seizogyo2_via_preset()
+    test_build_schedule_seizogyo3_via_preset()
     print("========== 全テスト PASS ==========")

@@ -42,9 +42,10 @@ jobs:
           GEN_POSTS_SEIZOGYO: ${{ vars.GEN_POSTS_SEIZOGYO || '12' }}
           GEN_POSTS_URANAI: ${{ vars.GEN_POSTS_URANAI || '12' }}
           GEN_POSTS_MEGURI: ${{ vars.GEN_POSTS_MEGURI || '12' }}
-          # seizogyo2（製造業・共感認知型）は立ち上げ期は手動R1バッチ運用のため既定0＝生成オフ
+          # seizogyo2（住田）/seizogyo3（ぱし）は立ち上げ期は手動R1バッチ運用のため既定0＝生成オフ
           # （手動投稿と自動生成の二重投稿を防ぐ）。自動生成を始めるときに Variable を 12 にする。
           GEN_POSTS_SEIZOGYO2: ${{ vars.GEN_POSTS_SEIZOGYO2 || '0' }}
+          GEN_POSTS_SEIZOGYO3: ${{ vars.GEN_POSTS_SEIZOGYO3 || '0' }}
           GEN_MODEL: ${{ vars.GEN_MODEL || 'claude-opus-4-8' }}
           # キルスイッチ: Variable PAUSED=1 で生成・投稿を即停止。
           PAUSED: ${{ vars.PAUSED || '0' }}
@@ -65,4 +66,5 @@ jobs:
           MAIL_TO_URANAI: ${{ vars.MAIL_TO_URANAI || '' }}
           MAIL_TO_MEGURI: ${{ vars.MAIL_TO_MEGURI || '' }}
           MAIL_TO_SEIZOGYO2: ${{ vars.MAIL_TO_SEIZOGYO2 || '' }}
+          MAIL_TO_SEIZOGYO3: ${{ vars.MAIL_TO_SEIZOGYO3 || '' }}
         run: python main_weekly.py

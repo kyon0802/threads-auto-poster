@@ -222,3 +222,10 @@ PRD #2 の Phase 2 を実装。実績→分析→レポート→AI生成→**機
 - pashi特有コンプラ＝実在派遣会社の名指し貶し・属性差別・具体求人化を検証で排除（既存の「洗脳しやすい」等の芸風は再生産せず、給料公開/逆張り/相談回答の合法な芸風に寄せた）。
 - 生成は引き続き `GEN_POSTS_SEIZOGYO2=0`（手動R1・二重投稿防止）。メール宛先は seizogyo2 の設定（既定＋別宛先）のまま＝実アドレスは Variable のみ（§17b）。エンジンのコード変更なし。
 - フォルダ名変更：`02_新運用_共感認知2アカ`→`02_新運用_2アカ`（2アカ体制の中立名）。
+
+### 26追補4（2026-07-08）ぱしを seizogyo3（独立シート）へ分離＝アカウント別シート＋別スケジュール
+- **方針転換**：今後 seizogyo2 系は「自動生成＋分析」を回し、かつ**アカウントごとに投稿時間を変えたい**という要件。1シートに2アカだと schedule PRESET が事業単位で共有されるため、**アカウント＝1事業＝1シート**に分離してブラスト半径と per-account スケジュールを独立させた。
+- **seizogyo2＝住田のみ／seizogyo3＝ぱし**（新シート「Threads運用｜製造業3」・morll所有・SA共有）。移行は posted 履歴ゼロのタイミング（初回公開前）に実施＝完全クリーン。順序＝seizogyo3構築(inert)→seizogyo2からぱし削除→BUSINESSESにseizogyo3追加、で**二重投稿ゼロ**を担保。
+- **per-account スケジュール**：`PRESETS["seizogyo2"]`（住田＝朝夜寄り4窓）と `PRESETS["seizogyo3"]`（ぱし＝昼夕寄り4窓）を**窓が一切重ならない**よう設計（同一運用者2アカのCIBニアミス防止）。`test_seizogyo2_3_windows_do_not_overlap` で非重複を機械保証。`SCHEDULE_FN_BY_BUSINESS` に seizogyo3 追加。
+- weekly.yml に `GEN_POSTS_SEIZOGYO3`（既定0＝生成オフ）＋`MAIL_TO_SEIZOGYO3` を配線。Variable も設定（生成オフ・レポート宛先は seizogyo2 と同じ）。テスト45→47本全PASS。
+- ぱしR1 12本は seizogyo3 に queued 再投入（07-08〜13・昼/夕）。seizogyo2 側のぱし関連タブ・accounts行は削除済み。実アドレス/トークン/シートIDは公開repoに無し（§17b）。
