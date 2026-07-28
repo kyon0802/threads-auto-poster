@@ -54,7 +54,7 @@ GitHub Actions（すべて別systemの5本）
   - `seizogyo2`（製造業・共感認知型 `tenshokuman`＝住田）
   - `seizogyo3`（製造業・本音暴露型 `pashi`＝ぱし。2026-07-08にseizogyo2から分離＝**アカウント別シート**）
 - **廃止**: `uranai`（占い「結」・`miko_yui_musubi`）は 2026-07-28 に**廃止**。156投稿で累計227表示（平均1.5）とアカウント側の配信抑制が疑われたため、人格・アカウント名ごと終了。ナレッジのみローカルへ保全（占いThreads-note事業/結_アーカイブ_20260728）。**新しい占いアカウントは未定**。
-- **未起動**: `meguri`（占い「澪」・`mio_meguri`）はコード・シート・draft26本まで完成、**トークン未取得のためBUSINESSES未登録＝inert**。手順は非公開の起動手順書（§7）。
+- **立ち上げ中**: `meguri`（占い「澪」・アカウントキー `mio__meguri`＝**アンダースコア2つ**）。トークン取得済み・投稿26本を queued 予約済み（07-29〜08-10・1日2本）。**BUSINESSES へ追加すると稼働開始**。自動生成は `GEN_POSTS_MEGURI=0` で当面オフ（在庫を手動消化）。手順は非公開の起動手順書（§7）。
 - **3日PDCAサイクル**: weekly.yml は毎日叩くが `is_cycle_day`（起点 2026-06-28・3日周期）の日だけ本処理。各サイクルで「翌日から3日×4本/日」を生成→隙間なく連続。手動実行は `FORCE_CYCLE=1`。
 - **投稿スケジュール**: 事業別プリセット（`schedule.PRESETS`）で1日4本・ランダム配置・最低間隔30分。seizogyo=昼1＋夜3／meguri=朝昼夕夜の4窓／seizogyo2=生活リズム4窓（朝通勤・昼休憩・夕帰宅・夜寝る前）／seizogyo3=昼夕寄り4窓（seizogyo2と窓が重ならないことをテストで機械保証＝CIB配慮）。
 - **生成**: `GENERATE_POSTS=1`＋`ANTHROPIC_API_KEY`。`GEN_STATUS`=draft(人が確認)/queued(全自動公開)。**事業別に `GEN_STATUS_<NAME>` で上書き可**（製造業だけdraft等）。生成前に必須タブゲート（§17e）、生成後に機械コンプラゲート。**seizogyo2/seizogyo3 は `GEN_POSTS_*=0` で生成オフ（立ち上げ期の手動運用）。**
