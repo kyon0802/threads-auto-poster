@@ -4,10 +4,15 @@
 レイアウトは table ＋ 全要素インラインCSS（flex/grid/外部CSSは使わない）。
 
 含む項目（ユーザー要望）:
-  1) KPIサマリ（各指標に短い説明つき＝曖昧さをなくす）
+  0) 運用状態バンド（在庫ランウェイ / フォロワー増減 / 生成の成否）★2026-07-28追加
+  1) KPIサマリ（直近7日・前7日比つき。各指標に短い説明）
   2) 今週の投稿ランキング TOP5（**実際の投稿本文**を全文表示）— 表示数順＋エンゲージ率順
-  3) 傾向分析（時間帯/曜日/本文長/形式の棒グラフ＋一言の読み解き）
+  3) 傾向分析（時間帯/曜日/本文長/形式の棒グラフ＋一言の読み解き・28日窓）
   4) 来週の方針（AI生成）＋ 方針に沿った投稿例 3本
+
+★2026-07-28の改修理由: 以前は全期間累計を「今週の…」と表示していたため毎回ほぼ同じ数字が出て、
+在庫が尽きて9日間投稿が止まっていたことも、生成が4サイクル連続で失敗していたことも、
+レポートからは一切読み取れなかった。運用状態を必ず目に入る位置に出す。
 """
 from __future__ import annotations
 
@@ -24,6 +29,12 @@ LINE = "#e3e8ee"     # 枠線
 PANEL = "#ffffff"    # カード背景
 PAGE = "#f4f6f8"     # ページ背景
 TRACK = "#eef1f5"    # 棒グラフの溝
+
+# 状態色（在庫・生成の成否など。数値の増減とは別系統で使う）
+OK = "#0ca30c"
+WARN = "#b8860b"
+CRIT = "#d03b3b"
+DOWN = "#c2410c"     # 前期比マイナス
 
 
 def _esc(s) -> str:
@@ -63,24 +74,123 @@ def _best(rows):
     return max(pool, key=lambda r: (r[3] if isinstance(r[3], (int, float)) else -1), default=None)
 
 
+def _delta_chip(v) -> str:
+    """前期比（増減率）のチップ。None＝比較不能（前期0や履歴なし）は「—」で誤誘導を防ぐ。"""
+    if v is None:
+        return (f'<span style="font-size:10.5px;color:{SUB};">前期比 —</span>')
+    pct = float(v) * 100
+    if abs(pct) < 0.5:
+        return f'<span style="font-size:10.5px;color:{SUB};">→ 横ばい</span>'
+    up = pct > 0
+    color = OK if up else DOWN
+    return (f'<span style="font-size:10.5px;font-weight:700;color:{color};">'
+            f'{"▲" if up else "▼"} {abs(pct):.0f}%</span>')
+
+
 def _kpi_cards(a: dict, t: dict) -> str:
+    """KPIカード。期間窓つきの分析なら前期比チップを添える。"""
+    win = a.get("window_days")
+    period = a.get("period_label")
+    scope = f"直近{win}日({period})" if win and period else "集計対象"
+    d = a.get("delta") or {}
     items = [
-        (_num(a.get("total_views", 0)), "総表示回数", "今週の全投稿が見られた合計回数（リーチの大きさ）"),
-        (_er_pct(a.get("avg_er")), "平均エンゲージ率", "表示に対する反応の割合。投稿の“刺さり”の質"),
-        (_num(a.get("n_posts", 0)), "分析投稿数", "今回の集計対象になった投稿の本数"),
-        (_num(a.get("total_reactions", 0)), "合計リアクション", "いいね＋返信＋リポスト＋引用の総数"),
+        (_num(a.get("total_views", 0)), "総表示回数", d.get("total_views"),
+         f"{scope}に投稿した分が見られた合計回数（リーチの大きさ）"),
+        (_er_pct(a.get("avg_er")), "平均エンゲージ率", d.get("avg_er"),
+         "表示に対する反応の割合。投稿の“刺さり”の質"),
+        (_num(a.get("n_posts", 0)), "投稿数", d.get("n_posts"),
+         f"{scope}に公開できた本数（0なら在庫切れ）"),
+        (_num(a.get("total_reactions", 0)), "合計リアクション", d.get("total_reactions"),
+         "いいね＋返信＋リポスト＋引用の総数"),
     ]
     cells = ""
-    for val, label, desc in items:
+    for val, label, delta, desc in items:
+        chip = _delta_chip(delta) if a.get("window_days") else ""
         cells += (
             f'<td width="25%" valign="top" style="padding:6px;">'
             f'<div style="background:{PANEL};border:1px solid {LINE};border-radius:12px;padding:14px 12px;">'
             f'<div style="font-size:24px;font-weight:800;color:{t["accent_d"]};line-height:1.2;">{val}</div>'
             f'<div style="font-size:12px;font-weight:700;color:{INK};margin-top:4px;">{label}</div>'
+            + (f'<div style="margin-top:2px;">{chip}</div>' if chip else "")
+            + f'<div style="font-size:10.5px;color:{SUB};margin-top:3px;line-height:1.5;">{desc}</div>'
+            f'</div></td>')
+    table = (f'<table width="100%" style="border-collapse:collapse;table-layout:fixed;margin:4px 0 6px;">'
+             f'<tr>{cells}</tr></table>')
+    if a.get("window_days"):
+        life = a.get("lifetime") or {}
+        table += (f'<div style="font-size:10.5px;color:{SUB};margin:0 6px 6px;line-height:1.6;">'
+                  f'※ 数値は<b>直近{win}日（{_esc(period)}）に公開した投稿</b>の実績。'
+                  f'「前期比」の比較対象は<b>前{win}日（{_esc(a.get("prev_period_label", ""))}）</b>。'
+                  f'（参考：全期間累計 {_num(life.get("total_views", 0))}表示 / '
+                  f'{_num(life.get("n_posts", 0))}投稿）</div>')
+    return table
+
+
+def _status_band(runway: dict | None, followers: dict | None, gen_info: dict | None) -> str:
+    """★運用状態バンド。「投稿が出ているか／出せる在庫があるか」を最上部に置く。
+
+    今回の障害（在庫ゼロで9〜19日停止・生成4回連続失敗）が、レポートを見ても
+    分からなかったことへの対策。数字ではなく運用の生死をここで見せる。
+    """
+    if runway is None and followers is None and gen_info is None:
+        return ""
+    cells = []
+
+    if runway is not None:
+        pending = runway.get("pending", 0)
+        days = runway.get("days_left", 0)
+        overdue = runway.get("overdue", 0)
+        if pending == 0:
+            silent = runway.get("silent_days")
+            note = f"最終投稿から{silent}日" if silent is not None else "公開実績なし"
+            cells.append((CRIT, "🔴 在庫ゼロ", f"残り0日・{note}",
+                          "このままでは投稿が1本も出ません"))
+        elif days <= 2 or overdue:
+            extra = f"・時刻超過{overdue}本" if overdue else ""
+            cells.append((WARN, f"🟡 在庫{pending}本", f"残り{days}日{extra}", "早めの補充が必要です"))
+        else:
+            cells.append((OK, f"🟢 在庫{pending}本", f"残り{days}日", "投稿は継続して出ます"))
+
+    if followers is not None and followers.get("current") is not None:
+        cur = followers["current"]
+        dl = followers.get("delta")
+        if dl is None:
+            sub, color = "増減不明（履歴不足）", SUB
+        elif dl > 0:
+            sub, color = f"+{dl}人", OK
+        elif dl < 0:
+            sub, color = f"{dl}人", DOWN
+        else:
+            sub, color = "±0人", SUB
+        cells.append((color, f"👥 {cur:,}", sub, "フォロワー数（7日前との比較）"))
+
+    if gen_info is not None:
+        ok = gen_info.get("ok")
+        if ok is True:
+            n = gen_info.get("written", 0)
+            cells.append((OK, f"🟢 生成 {n}本", gen_info.get("status", ""), "次サイクル分を投入済み"))
+        elif ok is False:
+            cells.append((CRIT, f"🔴 生成失敗", _esc(gen_info.get("reason", "原因不明")),
+                          _esc(gen_info.get("detail", ""))[:110]))
+        else:
+            cells.append((SUB, "⚪ 生成オフ", _esc(gen_info.get("reason", "")), "設定により生成していません"))
+
+    if not cells:
+        return ""
+    width = int(100 / len(cells))
+    tds = ""
+    for color, head, sub, desc in cells:
+        tds += (
+            f'<td width="{width}%" valign="top" style="padding:6px;">'
+            f'<div style="background:{PANEL};border:1px solid {LINE};border-left:4px solid {color};'
+            f'border-radius:10px;padding:12px;">'
+            f'<div style="font-size:15px;font-weight:800;color:{color};line-height:1.3;">{head}</div>'
+            f'<div style="font-size:12px;font-weight:700;color:{INK};margin-top:3px;">{sub}</div>'
             f'<div style="font-size:10.5px;color:{SUB};margin-top:3px;line-height:1.5;">{desc}</div>'
             f'</div></td>')
-    return (f'<table width="100%" style="border-collapse:collapse;table-layout:fixed;margin:4px 0 6px;">'
-            f'<tr>{cells}</tr></table>')
+    return (f'<div style="margin:14px 0 2px;font-size:13px;font-weight:800;color:{INK};">運用状態</div>'
+            f'<table width="100%" style="border-collapse:collapse;table-layout:fixed;margin:2px 0 8px;">'
+            f'<tr>{tds}</tr></table>')
 
 
 def _rank_card(i: int, r: dict, t: dict) -> str:
@@ -156,6 +266,14 @@ def _interpret(a: dict) -> str:
 
 def _trend(a: dict, t: dict) -> str:
     body = ""
+    tw, tl = a.get("trend_window_days"), a.get("trend_period_label")
+    if tw and tl:
+        # KPIは7日窓だが、曜日別などは7日だと1本ずつでノイズになるので長めの窓で見る。
+        # どの期間を見ているかを明示しないと、KPIと数字が合わず混乱するため必ず出す。
+        body += (f'<div style="font-size:11px;color:{SUB};margin:2px 0 8px;line-height:1.6;">'
+                 f'傾向は<b>直近{tw}日（{_esc(tl)}・{_num(a.get("trend_n_posts", 0))}投稿）</b>で集計。'
+                 f'上のKPI（直近{a.get("window_days")}日）とは対象期間が異なります'
+                 f'（曜日別などは7日だと1本ずつになり判断できないため）。</div>')
     for axis, key in [("時間帯", "by_time"), ("曜日", "by_weekday"), ("本文長", "by_length"), ("ツリー有無", "by_tree")]:
         body += (f'<div style="margin:10px 0;"><div style="font-size:12px;font-weight:700;color:{SUB};'
                  f'margin-bottom:5px;">{axis}別 平均エンゲージ率</div>{_bars(a.get(key, []), t)}</div>')
@@ -163,8 +281,15 @@ def _trend(a: dict, t: dict) -> str:
     return _section("📈 傾向分析（どこが伸びているか）", body, t)
 
 
-def _strategy(strategy: dict | None, t: dict) -> str:
+def _strategy(strategy: dict | None, t: dict, error: str | None = None) -> str:
     if not strategy:
+        # 方針が無いまま黙って消えると「正常なスキップ」と見分けがつかないので理由を出す。
+        if error:
+            return _section("🧭 来週の方針", (
+                f'<div style="background:#fdf3f3;border:1px solid #f3d4d4;border-radius:10px;'
+                f'padding:11px 14px;font-size:12.5px;color:{INK};line-height:1.7;">'
+                f'今回は方針を生成できませんでした（理由: <b style="color:{CRIT};">{_esc(error)}</b>）。'
+                f'解消すると次サイクルから自動で復帰します。</div>'), t)
         return ""
     direction = strategy.get("direction") or ""
     focus = strategy.get("focus") or []
@@ -200,14 +325,23 @@ def _section(title: str, inner: str, t: dict) -> str:
 
 def build_fragment(account: str, analysis: dict, gen_date: str, theme: str = "seizo",
                    title: str | None = None, strategy: dict | None = None,
-                   week_label: str | None = None) -> str:
-    """1アカウント分のレポート本体（<html>なし）。複数アカをまとめて1通のメールに入れられる。"""
+                   week_label: str | None = None, *,
+                   followers: dict | None = None, runway: dict | None = None,
+                   gen_info: dict | None = None, strategy_error: str | None = None) -> str:
+    """1アカウント分のレポート本体（<html>なし）。複数アカをまとめて1通のメールに入れられる。
+
+    followers … analyzer.follower_trend() の結果（None なら非表示）
+    runway    … inventory.compute_runway() の結果（None なら非表示）
+    gen_info  … {"ok": True/False/None, "reason","detail","written","status"}（None なら非表示）
+    """
     t = THEMES.get(theme, THEMES["seizo"])
     title = title or account
     n = analysis.get("n_posts", 0)
+    period = analysis.get("period_label")
+    scope = week_label or (f'直近{analysis.get("window_days")}日 {period}' if period else None)
     sub = f'{t["label"]} ・ 生成日 {_esc(gen_date)} ・ 対象 {n} 投稿'
-    if week_label:
-        sub = f'{t["label"]} ・ {_esc(week_label)} ・ 生成日 {_esc(gen_date)} ・ 対象 {n} 投稿'
+    if scope:
+        sub = f'{t["label"]} ・ {_esc(scope)} ・ 生成日 {_esc(gen_date)} ・ 対象 {n} 投稿'
 
     header = (
         f'<div style="background:{t["accent"]};border-radius:14px;padding:18px 22px;margin:18px 0 6px;">'
@@ -216,12 +350,14 @@ def build_fragment(account: str, analysis: dict, gen_date: str, theme: str = "se
 
     return (
         header
+        + _status_band(runway, followers, gen_info)
         + _kpi_cards(analysis, t)
-        + _ranking("🏆 投稿ランキング TOP5（表示数）", analysis.get("top", []), t, "上位データがまだありません")
+        + _ranking("🏆 投稿ランキング TOP5（表示数）", analysis.get("top", []), t,
+                   "この期間の投稿がありません（在庫切れの可能性）")
         + _ranking("⭐ 投稿ランキング TOP5（エンゲージ率）", analysis.get("top_er", []), t,
                    "エンゲージ率の取得データがまだ少なめです")
         + _trend(analysis, t)
-        + _strategy(strategy, t)
+        + _strategy(strategy, t, strategy_error)
         + (f'<div style="font-size:10.5px;color:{SUB};margin-top:22px;padding-top:12px;'
            f'border-top:1px solid {LINE};line-height:1.6;text-align:center;">'
            f'Threads自動分析 ・ エンゲージ率＝(いいね＋返信＋リポスト＋引用)÷表示回数<br>'
@@ -243,8 +379,12 @@ def wrap_document(title: str, inner: str) -> str:
 
 def build_html(account: str, analysis: dict, gen_date: str, theme: str = "seizo",
                title: str | None = None, strategy: dict | None = None,
-               week_label: str | None = None) -> str:
+               week_label: str | None = None, *,
+               followers: dict | None = None, runway: dict | None = None,
+               gen_info: dict | None = None, strategy_error: str | None = None) -> str:
     """1アカウント分の完全なHTML文書（reports/ 保存・添付用）。"""
     return wrap_document(
         title or account,
-        build_fragment(account, analysis, gen_date, theme, title, strategy, week_label))
+        build_fragment(account, analysis, gen_date, theme, title, strategy, week_label,
+                       followers=followers, runway=runway, gen_info=gen_info,
+                       strategy_error=strategy_error))

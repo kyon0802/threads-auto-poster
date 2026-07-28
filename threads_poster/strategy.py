@@ -16,6 +16,7 @@ import json
 import logging
 
 from .compliance import check_post, extract_ng_words
+from .errors import classify_generation_error
 from .generator import THREADS_HOOK_RULES
 
 logger = logging.getLogger("strategy")
@@ -99,14 +100,21 @@ def make_anthropic_strategy_fn(model: str = DEFAULT_MODEL):
 
 
 def generate_strategy(store, account: str, analysis: dict, generate_fn=None,
-                      model: str = DEFAULT_MODEL) -> dict | None:
+                      model: str = DEFAULT_MODEL, on_error=None) -> dict | None:
     """来週方針＋例文を生成して dict で返す。例文はコンプラゲート通過分のみ残す。
-    生成に失敗（キー無し等）したら None（レポートは方針セクションなしで出力）。"""
+    生成に失敗（キー無し等）したら None（レポートは方針セクションなしで出力）。
+
+    on_error(reason: str) … 失敗時に理由を呼び出し側へ通知するコールバック。
+    以前は失敗しても黙って None を返すだけで、レポートから方針セクションが
+    「理由なく消える」＝正常なスキップと区別できなかった（2026-07の障害で9日間気づけなかった一因）。
+    """
     guideline = store.get_guideline()
     knowledge = store.get_knowledge(account)
     profile = store.get_profile(account)
     if not knowledge.strip() and not profile:
         logger.info("%s: ナレッジ/プロフィール未整備のため方針生成をスキップ", account)
+        if on_error:
+            on_error("ナレッジ/プロフィール未整備")
         return None
     ng = extract_ng_words(guideline)
     fn = generate_fn or make_anthropic_strategy_fn(model)
@@ -114,7 +122,10 @@ def generate_strategy(store, account: str, analysis: dict, generate_fn=None,
         prompt = build_strategy_prompt(account, analysis, knowledge, guideline, profile)
         raw = fn(prompt)
     except Exception as e:  # noqa: BLE001 キー無し/通信失敗等。方針なしでレポートは出す。
-        logger.warning("%s: 方針生成に失敗（方針なしで継続）: %s", account, e)
+        reason = classify_generation_error(e)
+        logger.warning("%s: 方針生成に失敗（%s・方針なしで継続）: %s", account, reason, e)
+        if on_error:
+            on_error(reason)
         return None
 
     examples = []

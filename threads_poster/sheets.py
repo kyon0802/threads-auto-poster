@@ -398,6 +398,14 @@ class GoogleSheetStore(Store):
         to_internal, _ = header_maps(list(recs[0].keys()), INSIGHTS_FIELD_ALIASES)
         return [{to_internal.get(k, k): v for k, v in r.items()} for r in recs]
 
+    def get_account_metrics(self, account: str) -> list[dict]:
+        """アカウント指標_<acc>（フォロワー数等の日次スナップショット）を内部キーで返す。"""
+        recs = self._read_tab_raw(f"{ACCOUNT_METRICS_TAB_PREFIX}{account}")
+        if not recs:
+            return []
+        to_internal, _ = header_maps(list(recs[0].keys()), ACCOUNT_METRICS_FIELD_ALIASES)
+        return [{to_internal.get(k, k): v for k, v in r.items()} for r in recs]
+
     def get_profile(self, account: str) -> dict:
         """プロフィール_<acc>（項目/内容）を {項目: 内容} で返す。"""
         return {str(r.get("項目")): str(r.get("内容"))
@@ -528,6 +536,9 @@ class MemoryStore(Store):
     # ---- Phase 2（テスト用）----
     def get_insights(self, account: str) -> list[dict]:
         return [r for r in self.insights if str(r.get("account")) == str(account)]
+
+    def get_account_metrics(self, account: str) -> list[dict]:
+        return [r for r in self.account_metrics if str(r.get("account")) == str(account)]
 
     def get_profile(self, account: str) -> dict:
         return getattr(self, "profiles", {}).get(account, {})

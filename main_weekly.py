@@ -23,7 +23,9 @@ from functools import partial
 from zoneinfo import ZoneInfo
 
 from threads_poster.sheets import GoogleSheetStore
-from threads_poster.analyzer import Analyzer
+from threads_poster.analyzer import Analyzer, follower_trend
+from threads_poster.errors import classify_generation_error
+from threads_poster.inventory import compute_runway, runway_message
 from threads_poster.reporter import Reporter
 from threads_poster.generator import Generator, GeneratorError
 from threads_poster.html_report import build_html
@@ -32,8 +34,27 @@ from threads_poster.strategy import generate_strategy
 from threads_poster.mailer import send_html
 from main import resolve_business_sheets
 
-# 事業名 → メール件名に出す日本語ラベル
-BIZ_LABEL = {"seizogyo": "製造業", "uranai": "占い（結）", "meguri": "占い（澪）"}
+# 事業名 → メール件名に出す日本語ラベル。
+# 未登録だと件名に内部キー（seizogyo2 等）がそのまま出る＝社外の配信先がいるので必ず入れる。
+BIZ_LABEL = {
+    "seizogyo": "製造業",
+    "uranai": "占い（結）",
+    "meguri": "占い（澪）",
+    "seizogyo2": "製造業（住田）",
+    "seizogyo3": "製造業（ぱし）",
+}
+
+
+def read_account_metrics(store, account: str) -> list[dict]:
+    """アカウント指標（フォロワー数の日次スナップショット）。未対応のStoreでも落ちない。"""
+    getter = getattr(store, "get_account_metrics", None)
+    if getter is None:
+        return []
+    try:
+        return getter(account)
+    except Exception:  # noqa: BLE001 指標が取れなくてもレポートは出す
+        logging.getLogger("main_weekly").warning("%s: アカウント指標を読めませんでした", account)
+        return []
 
 # ── 3日サイクル（PDCA）設定 ──────────────────────────────────────────────
 # 「3日分の投稿を作成→3日分を分析してレポート」を3日ごとに繰り返す。
@@ -62,7 +83,10 @@ def send_account_reports(reports: list[dict], *, user: str, password: str, to: s
     for rep in reports:
         # 宛先はレポート個別の to（事業別ルーティング）があればそれ、無ければ共通の to。
         rcpt = rep.get("to") or to
-        subject = f"【Threads週次】{rep['label']}｜{rep['account']}" + (f"（{gen_date}）" if gen_date else "")
+        # 在庫ゼロ・生成失敗のときは件名で分かるようにする（正常なレポートに埋もれさせない）。
+        prefix = "【要確認】" if rep.get("alert") else ""
+        subject = (f"{prefix}【Threads週次】{rep['label']}｜{rep['account']}"
+                   + (f"（{gen_date}）" if gen_date else ""))
         try:
             send_fn(user, password, sender, rcpt, subject, rep["html"], attachment_name=rep.get("filename"))
             sent += 1
@@ -149,6 +173,8 @@ def main() -> int:
     email_businesses = set(b.strip() for b in os.environ.get("EMAIL_BUSINESSES", "").split(",") if b.strip())
 
     sa_info = json.loads(sa_json)
+    # 期間窓・在庫ランウェイの基準時刻。シートの日時はJSTのnaive文字列なので合わせる。
+    now_local = datetime.now(ZoneInfo(tz_name)).replace(tzinfo=None)
     gen_date = datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d")
     os.makedirs(reports_dir, exist_ok=True)
     THEME = {"seizogyo": "seizo", "uranai": "uranai", "meguri": "uranai"}
@@ -172,43 +198,78 @@ def main() -> int:
         in_email = (not email_businesses) or (name in email_businesses)
         for acc in accounts:
             try:
-                analysis = Analyzer(store).run(acc)
+                analysis = Analyzer(store, now_fn=lambda: now_local).run(acc)
                 totals["analyzed"] += 1
                 Reporter(store).run(acc, analysis, gen_date)
                 totals["reported"] += 1
-                # レポート成果物（本文結合・方針生成・HTML）はメール対象の事業だけ作る
-                # （対象外の事業は分析・レポートタブ更新・投稿生成のみ＝無駄なAI課金/レンダリングを避ける）。
-                if in_email:
-                    enrich_tops_with_text(posts_all, acc, analysis)  # TOP5に実際の本文を結合
-                    # 来週の方針＋投稿例（AI生成）。generate=False(PAUSED や GENERATE_POSTS=0)なら
-                    # 課金を避けるため呼ばず None＝方針セクションなしでレポートは出す。
-                    strategy = generate_strategy(store, acc, analysis, model=gen_model) if generate else None
-                    fname = f"週次レポート_{acc}_{gen_date}.html"
-                    html = build_html(acc, analysis, gen_date, theme=theme, title=acc, strategy=strategy)
-                    with open(os.path.join(reports_dir, fname), "w", encoding="utf-8") as f:
-                        f.write(html)
-                    # アカウントごとに1通ずつ送るため、ここで個別に貯める（business＝宛先ルーティング用）
-                    email_reports.append({"account": acc, "label": BIZ_LABEL.get(name, name),
-                                          "business": name, "html": html, "filename": fname})
-                if generate:
-                    schedule_fn = SCHEDULE_FN_BY_BUSINESS.get(name)
+
+                # ── 生成（★レポートより先に実行する）─────────────────────────────
+                # 以前はレポートHTMLを組んだ後に生成していたため、生成の成否をレポートに
+                # 載せられなかった。2026-07の障害（残高不足で4サイクル連続失敗）が
+                # レポートから読み取れなかった原因なので、先に走らせて結果を持ち回る。
+                # 生成の例外はここで受け止め、レポート・メールは必ず最後まで出す。
+                gen_info = None
+                if not generate:
+                    gen_info = {"ok": None, "reason": "生成オフ（GENERATE_POSTS=0 または PAUSED=1）"}
+                else:
                     acc_n_posts = n_posts_for(name, os.environ, n_posts)
                     # GEN_POSTS_<NAME>=0 ＝ その事業だけ生成オフ（立ち上げ期の手動運用と自動生成の
                     # 二重投稿を防ぐ per-business スイッチ。分析・レポートは通常どおり実施）。
                     if acc_n_posts <= 0:
+                        gen_info = {"ok": None, "reason": f"GEN_POSTS_{name.upper()}=0（生成オフ）"}
                         log.info("%s: GEN_POSTS_%s=0 → 生成スキップ（分析・レポートは実施）",
                                  acc, name.upper())
                     else:
-                        res = Generator(store, acc, n_posts=acc_n_posts, model=gen_model,
-                                        status=gen_status, schedule_fn=schedule_fn).run(analysis)
-                        totals["generated_drafts"] += len(res["written"])
-                        log.info("%s: %s %d本投入 / 破棄 %d本", acc, gen_status, len(res["written"]), len(res["rejected"]))
+                        schedule_fn = SCHEDULE_FN_BY_BUSINESS.get(name)
+                        try:
+                            res = Generator(store, acc, n_posts=acc_n_posts, model=gen_model,
+                                            status=gen_status, schedule_fn=schedule_fn).run(analysis)
+                            totals["generated_drafts"] += len(res["written"])
+                            gen_info = {"ok": True, "written": len(res["written"]),
+                                        "status": f"{gen_status}で投入（破棄{len(res['rejected'])}本）"}
+                            log.info("%s: %s %d本投入 / 破棄 %d本", acc, gen_status,
+                                     len(res["written"]), len(res["rejected"]))
+                        except GeneratorError as e:  # 必須タブ未整備（§17e）
+                            failures += 1
+                            gen_info = {"ok": False, "reason": "必須タブ未整備", "detail": str(e)}
+                            log.error("%s: 生成中止（プロフィール/ガイドライン未整備）: %s", acc, e)
+                        except Exception as e:  # noqa: BLE001 残高不足/認証/レート等
+                            failures += 1
+                            reason = classify_generation_error(e)
+                            gen_info = {"ok": False, "reason": reason, "detail": str(e)}
+                            log.error("%s: 生成失敗（%s）: %s", acc, reason, e)
+
+                # ── レポート成果物（本文結合・方針生成・HTML）はメール対象の事業だけ ──
+                # （対象外の事業は分析・レポートタブ更新・投稿生成のみ＝無駄なAI課金/レンダリングを避ける）。
+                if in_email:
+                    enrich_tops_with_text(posts_all, acc, analysis)  # TOP5に実際の本文を結合
+                    followers = follower_trend(read_account_metrics(store, acc), now=now_local)
+                    runway = compute_runway(posts_all, acc, now=now_local,
+                                            posts_per_day=POSTS_PER_DAY)
+                    log.info("%s: %s", acc, runway_message(runway))
+                    # 来週の方針＋投稿例（AI生成）。generate=False(PAUSED や GENERATE_POSTS=0)なら
+                    # 課金を避けるため呼ばず None＝方針セクションなしでレポートは出す。
+                    strategy, strategy_err = None, None
+                    if generate:
+                        errs = []
+                        strategy = generate_strategy(store, acc, analysis, model=gen_model,
+                                                     on_error=errs.append)
+                        strategy_err = errs[0] if errs else None
+                    fname = f"週次レポート_{acc}_{gen_date}.html"
+                    html = build_html(acc, analysis, gen_date, theme=theme, title=acc,
+                                      strategy=strategy, followers=followers, runway=runway,
+                                      gen_info=gen_info, strategy_error=strategy_err)
+                    with open(os.path.join(reports_dir, fname), "w", encoding="utf-8") as f:
+                        f.write(html)
+                    # アカウントごとに1通ずつ送るため、ここで個別に貯める（business＝宛先ルーティング用）
+                    # alert＝件名に【要確認】を付ける条件（在庫ゼロ or 生成失敗）。
+                    alert = (gen_info or {}).get("ok") is False or runway["pending"] == 0
+                    email_reports.append({"account": acc, "label": BIZ_LABEL.get(name, name),
+                                          "business": name, "html": html, "filename": fname,
+                                          "alert": alert})
                 # 投稿タブを投稿日時の降順に整える（新しい日付が上）。生成で追記した行も上に来る。
                 store.sort_posts_tab(acc, descending=True)
-            except GeneratorError as e:  # 必須タブ未整備（§17e）→ そのアカだけ失敗扱い
-                failures += 1
-                log.error("%s: 生成中止（プロフィール/ガイドライン未整備）: %s", acc, e)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 分析/レポート/シート書込の失敗
                 failures += 1
                 log.exception("%s の週次処理に失敗: %s", acc, e)
 
