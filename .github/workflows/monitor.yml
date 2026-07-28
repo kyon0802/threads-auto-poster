@@ -1,0 +1,51 @@
+name: threads-inventory-monitor
+
+on:
+  schedule:
+    # 毎日 08:00 JST（= 23:00 UTC）。生成サイクル(06:00 JST)の後に見るので、
+    # 「今朝の生成が走ったのに在庫が増えていない」まで検知できる。
+    - cron: "0 23 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: threads-monitor   # 投稿/収集/週次とは別系統
+  cancel-in-progress: false
+
+# GITHUB_TOKEN は読み取りのみ（このrepoはワークフローから書き戻さない）
+permissions:
+  contents: read
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Check posting inventory (read-only)
+        env:
+          BUSINESSES: ${{ secrets.BUSINESSES }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          TZ_NAME: Asia/Tokyo
+          # 在庫の残り日数がこれ以下なら警告（既定2日）。
+          RUNWAY_WARN_DAYS: ${{ vars.RUNWAY_WARN_DAYS || '2' }}
+          # 週次レポートと同じ宛先ルーティング（MAIL_TO_<NAME> があればその事業だけ差し替え）。
+          ENABLE_EMAIL: ${{ vars.ENABLE_EMAIL || '0' }}
+          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          MAIL_TO: ${{ vars.MAIL_TO || secrets.MAIL_USERNAME }}
+          MAIL_TO_SEIZOGYO: ${{ vars.MAIL_TO_SEIZOGYO || '' }}
+          MAIL_TO_URANAI: ${{ vars.MAIL_TO_URANAI || '' }}
+          MAIL_TO_MEGURI: ${{ vars.MAIL_TO_MEGURI || '' }}
+          MAIL_TO_SEIZOGYO2: ${{ vars.MAIL_TO_SEIZOGYO2 || '' }}
+          MAIL_TO_SEIZOGYO3: ${{ vars.MAIL_TO_SEIZOGYO3 || '' }}
+        # 在庫ゼロがあると exit 2 で run が赤くなる（メールが埋もれても気づけるよう二重化）。
+        run: python main_monitor.py

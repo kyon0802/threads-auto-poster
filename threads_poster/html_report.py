@@ -365,6 +365,62 @@ def build_fragment(account: str, analysis: dict, gen_date: str, theme: str = "se
     )
 
 
+def build_inventory_alert(rows: list[dict], gen_date: str) -> str:
+    """在庫ランウェイ監視のアラートHTML（日次・メール本文用）。
+
+    rows は inventory.summarize() の結果（深刻な順）。「ジョブが落ちたか」ではなく
+    「投稿が出せる在庫があるか」を直接見せるのが目的なので、状態を最初に大きく出す。
+    """
+    crit = [r for r in rows if r["severity"] == "critical"]
+    warn = [r for r in rows if r["severity"] == "warning"]
+    if crit:
+        color, head = CRIT, f"🔴 {len(crit)}アカウントが在庫ゼロ"
+        lead = "このままでは投稿が1本も出ません。生成を回すか、在庫を補充してください。"
+    elif warn:
+        color, head = WARN, f"🟡 {len(warn)}アカウントの在庫が残りわずか"
+        lead = "数日中に在庫が尽きます。次サイクルの生成が走るか確認してください。"
+    else:
+        color, head = OK, "🟢 全アカウント正常"
+        lead = "すべてのアカウントに十分な在庫があります。"
+
+    body = (f'<div style="background:{PANEL};border:1px solid {LINE};border-left:5px solid {color};'
+            f'border-radius:12px;padding:16px 18px;margin:14px 0;">'
+            f'<div style="font-size:19px;font-weight:800;color:{color};">{head}</div>'
+            f'<div style="font-size:13px;color:{INK};margin-top:6px;line-height:1.7;">{lead}</div></div>')
+
+    cells = ""
+    for r in rows:
+        c = {"critical": CRIT, "warning": WARN, "ok": OK}[r["severity"]]
+        last = f'{r["last_at"]:%m-%d %H:%M}' if r["last_at"] else "—"
+        silent = f'{r["silent_days"]}日' if r["silent_days"] is not None else "—"
+        cells += (
+            f'<tr>'
+            f'<td style="padding:8px 10px;border-bottom:1px solid {LINE};font-size:12.5px;color:{INK};">'
+            f'<b style="color:{c};">●</b> {_esc(r["account"])}</td>'
+            f'<td align="right" style="padding:8px 10px;border-bottom:1px solid {LINE};font-size:12.5px;'
+            f'color:{INK};font-weight:700;">{_num(r["pending"])}本</td>'
+            f'<td align="right" style="padding:8px 10px;border-bottom:1px solid {LINE};font-size:12.5px;'
+            f'color:{c};font-weight:700;">残り{r["days_left"]}日</td>'
+            f'<td align="right" style="padding:8px 10px;border-bottom:1px solid {LINE};font-size:12px;'
+            f'color:{SUB};">{last}</td>'
+            f'<td align="right" style="padding:8px 10px;border-bottom:1px solid {LINE};font-size:12px;'
+            f'color:{SUB};">{silent}</td>'
+            f'</tr>')
+    header = "".join(
+        f'<th align="{a}" style="padding:8px 10px;border-bottom:2px solid {LINE};font-size:11px;'
+        f'color:{SUB};font-weight:700;white-space:nowrap;">{t}</th>'
+        for t, a in [("アカウント", "left"), ("在庫", "right"), ("ランウェイ", "right"),
+                     ("在庫の最終日時", "right"), ("無投稿", "right")])
+    body += (f'<table width="100%" style="border-collapse:collapse;background:{PANEL};'
+             f'border:1px solid {LINE};border-radius:10px;"><tr>{header}</tr>{cells}</table>')
+    body += (f'<div style="font-size:10.5px;color:{SUB};margin-top:14px;line-height:1.7;">'
+             f'「在庫」＝これから公開される投稿の本数（status が空 または queued で未来の日時）。'
+             f'draft / retired は公開対象外なので含みません。<br>'
+             f'投稿ワークフローは在庫ゼロでも成功で終わるため、この通知が停止を検知する唯一の手段です。'
+             f'（{_esc(gen_date)} 時点）</div>')
+    return wrap_document("投稿在庫アラート", body)
+
+
 def wrap_document(title: str, inner: str) -> str:
     """レポート本体（fragment 1個 or 複数連結）を1枚のHTML文書にする。"""
     return (
