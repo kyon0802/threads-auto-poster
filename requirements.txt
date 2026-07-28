@@ -1,4 +1,11 @@
-requests>=2.31
-gspread>=6.0
-google-auth>=2.30
+# メジャー更新で黙って壊れないよう上限を付ける（2026-07-28）。
+# これまで上限もロックも無く、weekly.yml は anthropic SDK の最新版を毎回ノーピンで取得していた。
+# SDKに破壊的変更が入った日に生成だけが落ち、しかも「残高不足のときと同じ exit 2」に見えるため
+# 切り分けに時間を溶かす。バージョンを上げるときは tests/ を通してから。
+requests>=2.31,<3
+gspread>=6.0,<7
+google-auth>=2.30,<3
 certifi>=2024.0
+# AI生成（generator / strategy）で使う。これまで requirements.txt に記載すら無く、
+# weekly.yml が暗黙に最新版を入れていた。
+anthropic>=0.116,<1.0

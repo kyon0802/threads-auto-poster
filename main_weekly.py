@@ -133,6 +133,16 @@ def n_posts_for(name: str, env, default_n: int) -> int:
     return default_n
 
 
+def gen_status_for(name: str, env, default_status: str) -> str:
+    """事業ごとの生成後ステータス（draft=人が確認 / queued=自動公開）。
+
+    Variable `GEN_STATUS_<NAME>` があればその事業だけ差し替え、無ければ共通の `GEN_STATUS`。
+    製造業は過去2回BAN済みで、占いと同じ「無確認自動公開」しか選べないのがリスクだったため
+    事業別に分離した（例：GEN_STATUS=queued かつ GEN_STATUS_SEIZOGYO=draft）。
+    """
+    return env.get(f"GEN_STATUS_{name.upper()}", "").strip() or default_status
+
+
 def recipients_for(name: str, env, default_to: str) -> str:
     """事業ごとの週次レポート宛先。Variable `MAIL_TO_<NAME>`（カンマ区切りで複数可）が
     あればそれを使い、無ければ default_to（`MAIL_TO`＝全事業共通の既定宛先）。
@@ -221,13 +231,14 @@ def main() -> int:
                                  acc, name.upper())
                     else:
                         schedule_fn = SCHEDULE_FN_BY_BUSINESS.get(name)
+                        acc_status = gen_status_for(name, os.environ, gen_status)
                         try:
                             res = Generator(store, acc, n_posts=acc_n_posts, model=gen_model,
-                                            status=gen_status, schedule_fn=schedule_fn).run(analysis)
+                                            status=acc_status, schedule_fn=schedule_fn).run(analysis)
                             totals["generated_drafts"] += len(res["written"])
                             gen_info = {"ok": True, "written": len(res["written"]),
-                                        "status": f"{gen_status}で投入（破棄{len(res['rejected'])}本）"}
-                            log.info("%s: %s %d本投入 / 破棄 %d本", acc, gen_status,
+                                        "status": f"{acc_status}で投入（破棄{len(res['rejected'])}本）"}
+                            log.info("%s: %s %d本投入 / 破棄 %d本", acc, acc_status,
                                      len(res["written"]), len(res["rejected"]))
                         except GeneratorError as e:  # 必須タブ未整備（§17e）
                             failures += 1

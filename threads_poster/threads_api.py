@@ -7,6 +7,7 @@ Threads API クライアント
 """
 from __future__ import annotations
 
+import re
 import time
 import logging
 import requests
@@ -16,9 +17,42 @@ logger = logging.getLogger("threads_api")
 GRAPH_BASE = "https://graph.threads.net"
 API_VERSION = "v1.0"
 
+# ★このrepoは公開（§17）＝GitHub Actions のログは第三者が閲覧できる。
+# アクセストークン（と長期化時の client_secret）は URL のクエリで送っているため、
+# requests の例外メッセージには `Max retries exceeded with url: ...access_token=<本物>` の形で
+# **秘密が丸ごと入る**。しかもトークンは GitHub Secret ではなくシート保管なので、
+# Actions の自動マスクも効かない。→ 外に出る文字列は必ずここを通してマスクする。
+_SECRET_PATTERN = re.compile(r"((?:access_token|client_secret)=)[^&\s'\"]+", re.IGNORECASE)
+
+
+def mask_secrets(text) -> str:
+    """URL・例外メッセージ中の access_token / client_secret を伏せる。
+
+    ログや例外に出る可能性のある文字列は必ずここを通すこと。
+    """
+    return _SECRET_PATTERN.sub(r"\1<REDACTED>", str(text))
+
 
 class ThreadsAPIError(Exception):
-    pass
+    """API呼び出しの失敗。メッセージは生成時にマスク済みにする。"""
+
+    def __init__(self, message):
+        super().__init__(mask_secrets(message))
+
+
+def http_request(method: str, url: str, params: dict, timeout: int = 30):
+    """requests の唯一の入口。通信例外を捕まえ、秘密をマスクして包み直す。
+
+    ここを通さずに requests を直接呼ぶと、瞬断・タイムアウト時の例外に
+    トークン付きURLが載って公開ログへ出る。新しい呼び出しも必ずここを経由させること。
+    """
+    try:
+        return requests.request(method, url, params=params, timeout=timeout)
+    except requests.RequestException as e:
+        # 例外チェーン（from e）は繋がない。元の例外の args にURLが残り、
+        # トレースバック出力で結局トークンが露出するため。
+        raise ThreadsAPIError(f"通信失敗 {method.upper()} {mask_secrets(url)}: "
+                              f"{type(e).__name__}: {mask_secrets(e)}") from None
 
 
 class ThreadsClient:
@@ -26,6 +60,10 @@ class ThreadsClient:
         self.user_id = str(user_id)
         self.access_token = access_token
         self.timeout = timeout
+
+    def _request(self, method: str, url: str, params: dict, timeout: int | None = None):
+        return http_request(method, url, params,
+                            self.timeout if timeout is None else timeout)
 
     # ---------- 投稿 ----------
     def create_container(
@@ -65,7 +103,7 @@ class ThreadsClient:
         if reply_control:
             params["reply_control"] = reply_control  # everyone / accounts_you_follow / mentioned_only
 
-        resp = requests.post(url, params=params, timeout=self.timeout)
+        resp = self._request("post", url, params)
         data = self._json(resp)
         if "id" not in data:
             raise ThreadsAPIError(f"container作成失敗: {data}")
@@ -85,7 +123,7 @@ class ThreadsClient:
         """コンテナの処理状態を返す: FINISHED / IN_PROGRESS / ERROR / EXPIRED / PUBLISHED"""
         url = f"{GRAPH_BASE}/{API_VERSION}/{container_id}"
         params = {"fields": "status,error_message", "access_token": self.access_token}
-        resp = requests.get(url, params=params, timeout=self.timeout)
+        resp = self._request("get", url, params)
         data = self._json(resp)
         return data.get("status", "UNKNOWN")
 
@@ -106,7 +144,7 @@ class ThreadsClient:
         """コンテナを公開し、公開後の投稿IDを返す。"""
         url = f"{GRAPH_BASE}/{API_VERSION}/{self.user_id}/threads_publish"
         params = {"creation_id": creation_id, "access_token": self.access_token}
-        resp = requests.post(url, params=params, timeout=self.timeout)
+        resp = self._request("post", url, params)
         data = self._json(resp)
         if "id" not in data:
             raise ThreadsAPIError(f"公開失敗: {data}")
@@ -182,7 +220,7 @@ class ThreadsClient:
         params: dict | None = {"fields": fields, "limit": limit, "access_token": self.access_token}
         out: list[dict] = []
         for _ in range(max_pages):
-            resp = requests.get(url, params=params, timeout=self.timeout)
+            resp = self._request("get", url, params)
             data = self._json(resp)
             out.extend(data.get("data", []))
             nxt = (data.get("paging") or {}).get("next")
@@ -197,7 +235,7 @@ class ThreadsClient:
         metrics = metrics or ["views", "likes", "replies", "reposts", "quotes", "shares"]
         url = f"{GRAPH_BASE}/{API_VERSION}/{media_id}/insights"
         params = {"metric": ",".join(metrics), "access_token": self.access_token}
-        resp = requests.get(url, params=params, timeout=self.timeout)
+        resp = self._request("get", url, params)
         return self._parse_insight_values(self._json(resp))
 
     def get_user_insights(self, metrics: list[str] | None = None,
@@ -211,7 +249,7 @@ class ThreadsClient:
             params["since"] = since
         if until:
             params["until"] = until
-        resp = requests.get(url, params=params, timeout=self.timeout)
+        resp = self._request("get", url, params)
         return self._parse_insight_values(self._json(resp))
 
     @staticmethod
@@ -243,7 +281,7 @@ class ThreadsClient:
         """
         url = f"{GRAPH_BASE}/refresh_access_token"
         params = {"grant_type": "th_refresh_token", "access_token": access_token}
-        resp = requests.get(url, params=params, timeout=timeout)
+        resp = http_request("get", url, params, timeout)
         data = resp.json()
         if "access_token" not in data:
             raise ThreadsAPIError(f"トークンリフレッシュ失敗: {data}")
@@ -258,7 +296,7 @@ class ThreadsClient:
             "client_secret": client_secret,
             "access_token": short_lived_token,
         }
-        resp = requests.get(url, params=params, timeout=timeout)
+        resp = http_request("get", url, params, timeout)
         data = resp.json()
         if "access_token" not in data:
             raise ThreadsAPIError(f"長期トークン交換失敗: {data}")

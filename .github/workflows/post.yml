@@ -10,14 +10,18 @@ concurrency:
   group: threads-auto-post
   cancel-in-progress: false   # 多重起動で二重投稿しないよう直列化
 
+# GITHUB_TOKEN は読み取りのみ（このrepoはワークフローから書き戻さない）
+permissions:
+  contents: read
+
 jobs:
   post:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -33,6 +37,10 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           TZ_NAME: Asia/Tokyo
+          # ★キルスイッチ。main.py は PAUSED=1 を見て即終了するが、これまで env に
+          # 渡していなかったため Variable を 1 にしても投稿は止まらなかった
+          # （ドキュメントとレポート本文は「効く」と案内していた）。2026-07-28 修正。
+          PAUSED: ${{ vars.PAUSED }}
           # 1アカ1日上限はリポジトリ Variable で一元管理（Settings → Secrets and variables
           # → Actions → Variables に MAX_POSTS_PER_DAY を作成）。未設定なら 50。
           MAX_POSTS_PER_DAY: ${{ vars.MAX_POSTS_PER_DAY || '50' }}

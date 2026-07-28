@@ -210,3 +210,24 @@ if __name__ == "__main__":
     for fn in fns:
         fn()
     print(f"\n全 {len(fns)} 件 PASS")
+
+
+# ---------------------------------------------------------------- 事業別スイッチ
+
+def test_gen_status_per_business():
+    # 製造業は過去2回BAN済み。全事業共通の GEN_STATUS しか無いと
+    # 「占いは自動公開・製造業は人が確認」ができなかった。
+    from main_weekly import gen_status_for
+    assert gen_status_for("uranai", {}, "queued") == "queued"                     # 既定にフォールバック
+    assert gen_status_for("seizogyo", {"GEN_STATUS_SEIZOGYO": "draft"}, "queued") == "draft"
+    assert gen_status_for("seizogyo", {"GEN_STATUS_SEIZOGYO": "  "}, "queued") == "queued"  # 空白は無視
+    assert gen_status_for("seizogyo2", {"GEN_STATUS_SEIZOGYO2": "draft"}, "queued") == "draft"
+    print("  ✓ GEN_STATUS_<NAME> による事業別 draft/queued 切替 OK")
+
+
+def test_biz_label_covers_all_live_businesses():
+    # 件名に内部キー（seizogyo2 等）が出ると社外の配信先に体裁が悪い
+    from main_weekly import BIZ_LABEL, SCHEDULE_FN_BY_BUSINESS
+    missing = [b for b in SCHEDULE_FN_BY_BUSINESS if b not in BIZ_LABEL]
+    assert not missing, f"メール件名ラベル未登録の事業: {missing}"
+    print("  ✓ 全事業にメール件名の日本語ラベルがある OK")

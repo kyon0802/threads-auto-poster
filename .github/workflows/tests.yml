@@ -8,14 +8,18 @@ on:
   pull_request: {}
   workflow_dispatch: {}
 
+# GITHUB_TOKEN は読み取りのみ（このrepoはワークフローから書き戻さない）
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"   # 本番(post.yml等)と同じバージョンで検証する
 

@@ -31,7 +31,7 @@
 ## 13. 改修ログ（2026-06-16〜18）障害対応・失敗通知・アカウント改名
 
 - **API access blocked 障害（2026-06-16）**: 投稿が全停止。原因は Meta側がトークンを全API一律 `OAuthException code 200 "API access blocked."` でブロック（=アプリ/アカウント主体への制限。トークン失効 code 190 とは別物で `refresh_access_token` すら弾かれる）。コード/cron/シートは正常。**Threadsアプリの「不正アクセス検知」をユーザーが承認・解除して復旧**。`error` で止まった行は `状態` を空に戻し再投稿。切り分けは「シートからトークンを読み `GET /v1.0/me` を `requests` で叩く」（urllibはmacOSのSSL CERT_VERIFY_FAILEDで不可）。
-- **失敗メール通知を有効化（2026-06-18）**: GitHub純正のActions失敗通知を利用。投稿エラー時は `main.py` が exit code 2 → run failure 扱い → メール送信。受信先 `morll.0802@gmail.com`（Settings→Notifications→Default notifications email＋System→Actions=Email/"failed workflows only"）。実テスト済み。※長時間ブロック時は10分毎にメールが来るため、将来シートでalert抑制する案あり。
+- **失敗メール通知を有効化（2026-06-18）**: GitHub純正のActions失敗通知を利用。投稿エラー時は `main.py` が exit code 2 → run failure 扱い → メール送信。受信先はオーナーのGitHub通知メール（Settings→Notifications→Default notifications email＋System→Actions=Email/"failed workflows only"）。実テスト済み。※長時間ブロック時は10分毎にメールが来るため、将来シートでalert抑制する案あり。
 - **アカウント改名（2026-06-18）**: Threads側で handle を `rk_riko2` → **`takumi_kojo_navi`** に変更。**user_id(36368336406145487)・アクセストークンは不変**（handle変更はトークンを無効化しない＝`GET /me` でid同一・username更新を確認済み）。システム側の表記を全て更新: シート（`accounts` の `アカウント` 値＋投稿タブ名 `投稿_rk_riko2`→`投稿_takumi_kojo_navi`）、`setup_account.py`/`setup_post_tab.py`/`migrate_headers_ja.py` の既定値・例、本ファイルの記述。**今後アカウント名を指すときは `takumi_kojo_navi`**。
 
 ---
@@ -133,13 +133,13 @@ PRD #2 の Phase 2 を実装。実績→分析→レポート→AI生成→**機
 
 ## 22. 改修ログ（2026-06-25）週次レポートの強化（TOP5全文＋詳細KPI＋デザイン刷新＋来週方針＋メール配信）
 
-ユーザー要望で週次レポートを刷新。①TOP5を**実際の投稿本文で全文表示**②各項目に説明をつけ曖昧さ排除③**明るい白ベースのシンプルなデザイン**④**来週の方針＋具体的な投稿例3本**（AI生成）⑤morll.0802@gmail.com へ**毎週メール配信**。
+ユーザー要望で週次レポートを刷新。①TOP5を**実際の投稿本文で全文表示**②各項目に説明をつけ曖昧さ排除③**明るい白ベースのシンプルなデザイン**④**来週の方針＋具体的な投稿例3本**（AI生成）⑤オーナー宛に**毎週メール配信**（宛先は Variable `MAIL_TO`）。
 
 - **`html_report.py` 全面刷新**：ダーク→**明るい白ベース**。**メール(Gmail)でもそのまま読める**よう table＋全要素インラインCSS（flex/grid/`<style>`/外部CSSなし）。セクション＝KPIサマリ(各指標に1行説明)／投稿ランキングTOP5(表示数順)／同(エンゲージ率順)／傾向分析(棒グラフ＋読み解き)／来週の方針／投稿例3本。`build_fragment`(本体)＋`wrap_document`(全文書)＋`build_html`(1アカ完結)に分割し、複数アカを1通のメールに連結可能。NaN/inf は『—』表示。本文は改行保持＋HTMLエスケープ(XSS安全)。
 - **`analyzer.py`**：`total_views`/`total_reactions`/`avg_er` のKPI合計と、**エンゲージ率順TOP5(`top_er`)** を追加（従来の表示数順 `top` と併存）。`_entry` に likes/replies/reposts/quotes/reactions を含め全文結合(`text`)は下流で付与。★**ER=0.0 を欠落扱いしないよう修正**（`x or ""` は数値0.0が falsy で平均/ランキングから脱落し avg_er が上振れしていた→`_has_er` で None/空文字のみ欠落判定）。
 - **`strategy.py`（新規）**：来週方針(direction)＋やること(focus)＋投稿例(examples 3本)を Claude で生成（`make_anthropic_strategy_fn`・`generate_fn` 注入可）。例文は**機械コンプラゲート**(NGワード/URL/字数)を通し違反は除外。キー無し/失敗時は **None**（方針セクションなしでレポートは出る）。**読取専用＝投稿キューに触れない**。
 - **`main_weekly.py`**：分析→`enrich_tops_with_text`(投稿後ID経由でTOP5に本文結合・事業ごと posts を1回読みで使い回し)→reporter→**方針生成(`generate` が True のときのみ＝PAUSED/GENERATE_POSTS を尊重・課金抑制)**→HTMLレポート(reports/保存)＋メール本文 fragment。メール本文＝各アカの視覚レポートを連結した1通。全 `open` に `encoding="utf-8"`。
-- **メール配信**：`weekly.yml` の `dawidd6/action-send-mail`(smtp.gmail.com:465・宛先 morll.0802@gmail.com・本文 `reports/メール本文.html`・添付 `reports/*.html`)は既存。**有効化に `ENABLE_EMAIL=1`(Variable・設定済み)＋`MAIL_USERNAME`/`MAIL_PASSWORD`(Secret＝Gmailアプリパスワード・ユーザー作業)** が必要。次の月曜 cron から配信、または `workflow_dispatch` で即時テスト可。
+- **メール配信**：`weekly.yml` の `dawidd6/action-send-mail`(smtp.gmail.com:465・宛先は Variable `MAIL_TO`・本文 `reports/メール本文.html`・添付 `reports/*.html`)は既存。**有効化に `ENABLE_EMAIL=1`(Variable・設定済み)＋`MAIL_USERNAME`/`MAIL_PASSWORD`(Secret＝Gmailアプリパスワード・ユーザー作業)** が必要。次の月曜 cron から配信、または `workflow_dispatch` で即時テスト可。
 - **テスト**：`test_phase2.py` に analyze合計KPI＋ER順TOP5／**ER=0.0回帰**／strategyコンプラゲート／html(本文全文＋数値整形＋方針)の計4ケースを追加。全スイートPASS。実データ(製造業21投稿・総表示4,978・平均ER0.69%)でテストレポートを生成しデザイン確認済み（Desktop `週次レポート_製造業_テスト_20260625.html`）。
 - **adversarialレビュー(workflow)で確定7件中、major(ER=0.0脱落)＋minor(方針のPAUSED素通り)＋nit(NaN/inf・json.loads・encoding・posts再読込)を反映済み。**
 
@@ -154,7 +154,7 @@ PRD #2 の Phase 2 を実装。実績→分析→レポート→AI生成→**機
 - **`main_weekly.py`**：`send_account_reports(reports, user, password, to, gen_date, send_fn=None)`＝アカウント別に件名 `【Threads週次】<事業ラベル>｜<account>（日付）` で送信、1通失敗が他を止めず `(sent, failed)` を返す。ループでは各アカの `build_html` を `email_reports` に貯めて最後に送信。`EMAIL_BUSINESSES` は **空＝全事業（運用中の全アカに個別送信）**（旧 既定"seizogyo"から変更）。メール失敗は run の失敗数に計上。
 - **`weekly.yml`**：python ステップ env に `ENABLE_EMAIL`/`EMAIL_BUSINESSES`/`MAIL_USERNAME`/`MAIL_PASSWORD`/`MAIL_TO`(既定= MAIL_USERNAME) を追加。旧メールステップ削除（`reports/メール本文.html` 依存も解消）。
 - **`strategy.py` 修正**：`build_strategy_prompt` に `profile` を渡し、**ナレッジが空ならプロフィールを知識源に使う**（占いはナレッジ未同期・プロフィールのみのため、声が反映されない不具合を解消）。
-- **テスト**：`test_phase2.py` に 個別送信(件名・通数)／1通失敗の隔離／`build_message` の3ケース追加。全PASS。**実機テスト**＝製造業(views4978)＋占い(views53)の2通をローカルSMTPで実送信成功（宛先 morll.0802@gmail.com・各 Desktop にHTMLも保存）。
+- **テスト**：`test_phase2.py` に 個別送信(件名・通数)／1通失敗の隔離／`build_message` の3ケース追加。全PASS。**実機テスト**＝製造業(views4978)＋占い(views53)の2通をローカルSMTPで実送信成功（宛先は Variable `MAIL_TO`・各 Desktop にHTMLも保存）。
 - **設定状況**：`ENABLE_EMAIL=1`＋`MAIL_USERNAME`/`MAIL_PASSWORD` 設定済。`EMAIL_BUSINESSES` 未設定＝全事業。次の月曜cronから両アカが**別々のメール**で届く。
 
 ---

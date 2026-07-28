@@ -12,14 +12,18 @@ concurrency:
   group: threads-weekly   # 投稿/収集とは別系統
   cancel-in-progress: false
 
+# GITHUB_TOKEN は読み取りのみ（このrepoはワークフローから書き戻さない）
+permissions:
+  contents: read
+
 jobs:
   weekly:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -36,6 +40,15 @@ jobs:
           GENERATE_POSTS: ${{ vars.GENERATE_POSTS || '0' }}
           # GEN_STATUS=draft(人が確認) / queued(完全全自動で公開)。安全のため既定 draft。
           GEN_STATUS: ${{ vars.GEN_STATUS || 'draft' }}
+          # ★事業別の上書き（2026-07-28追加）。従来は全事業共通の1つしか無く、
+          # 「占いは自動公開・製造業は人の確認を挟む」ができなかった。
+          # 製造業は過去2回BAN済みでガイドラインにも「3回目は永久BANリスク極大」と明記があるため、
+          # 事業ごとに draft/queued を選べるようにする。空なら GEN_STATUS にフォールバック。
+          GEN_STATUS_SEIZOGYO: ${{ vars.GEN_STATUS_SEIZOGYO || '' }}
+          GEN_STATUS_URANAI: ${{ vars.GEN_STATUS_URANAI || '' }}
+          GEN_STATUS_MEGURI: ${{ vars.GEN_STATUS_MEGURI || '' }}
+          GEN_STATUS_SEIZOGYO2: ${{ vars.GEN_STATUS_SEIZOGYO2 || '' }}
+          GEN_STATUS_SEIZOGYO3: ${{ vars.GEN_STATUS_SEIZOGYO3 || '' }}
           GEN_POSTS_PER_ACCOUNT: ${{ vars.GEN_POSTS_PER_ACCOUNT || '5' }}
           # 1日4本スケジュール対象（製造業/占い）は1サイクル分＝3日×4本＝12本（既定）。
           # 個別に上書きしたいときだけ Variable で設定。
