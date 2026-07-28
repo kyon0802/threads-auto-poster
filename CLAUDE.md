@@ -125,6 +125,10 @@ tests/                        テスト（API不要・モック・79本）。pyt
   test_logic.py / test_collect.py / test_phase2.py / test_schedule.py
   test_report_window.py（期間窓・在庫・エラー分類） / test_monitor.py / test_threads_api_masking.py
 sheet_templates/              accounts.csv / posts.csv / posts_example.csv（記入例）
+.claude/agents/               このrepo専用のサブエージェント定義10体（orchestrator が回し役。
+                              api-specialist / system-architect / devops / insights-engineer /
+                              data-analyst / content-strategist / compliance-reviewer /
+                              code-reviewer / qa-engineer）。公開repoなので事業ノウハウは書かない（§17b）
 docs/CHANGELOG.md             時系列の改修履歴（旧CLAUDE.md §11〜§25 ＋ §26以降）
 .github/workflows/            post.yml / collect.yml / weekly.yml / monitor.yml / tests.yml
 requirements.txt / .env.example / README.md / SETUP.md
