@@ -100,6 +100,37 @@ def _slots_for(rng: random.Random, **daily_kwargs) -> list[int]:
 # meguri（占い「澪」）＝朝・昼・夕・夜の4窓に各1本（暦は朝の縁起日告知が映えるため朝型）。
 # seizogyo2（製造業・共感認知型）＝工場勤務者の生活リズム4窓に各1本
 #   （朝=通勤・昼=休憩・夕=帰宅後・夜=寝る前。共感投稿が読まれる時間帯に合わせる）。
+def limit_daily(daily: dict, per_day: int) -> dict:
+    """1日あたりの本数を減らしたプリセットを返す（プリセット自体は書き換えない）。
+
+    立ち上げ直後のアカウントは凍結されやすいので、初動だけ物量を抑えたいことがある。
+    そのための一時的な間引きで、時間帯の性格（朝/昼/夕/夜）はできるだけ保つ。
+
+    - windows型（各窓に1本）… 窓を均等に間引く。2本なら最初と最後＝朝と夜が残る。
+    - 昼夜型（昼1本＋夜N本）… 昼の1本は残し、夜の本数を減らす。
+    per_day が元の本数以上なら、元のプリセットをそのまま返す。
+    """
+    if per_day <= 0:
+        raise ValueError("per_day は1以上にしてください")
+    out = dict(daily)
+    if "windows" in daily:
+        wins = daily["windows"]
+        if per_day >= len(wins):
+            return out
+        if per_day == 1:
+            out["windows"] = [wins[0]]
+        else:
+            # 端（最初と最後）を必ず含み、その間を均等割りする
+            idx = sorted({round(i * (len(wins) - 1) / (per_day - 1)) for i in range(per_day)})
+            out["windows"] = [wins[i] for i in idx]
+        return out
+    total = 1 + daily["evening_count"]
+    if per_day >= total:
+        return out
+    out["evening_count"] = max(0, per_day - 1)
+    return out
+
+
 PRESETS = {
     "seizogyo": dict(noon_center_min=12 * 60, noon_jitter_min=30,
                      evening_start_min=18 * 60, evening_end_min=23 * 60,

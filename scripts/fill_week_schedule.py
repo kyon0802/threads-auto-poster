@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from threads_poster.sheets import GoogleSheetStore  # noqa: E402
-from threads_poster.schedule import build_schedule, PRESETS  # noqa: E402
+from threads_poster.schedule import build_schedule, limit_daily, PRESETS  # noqa: E402
 from threads_poster.compliance import check_post, extract_ng_words  # noqa: E402
 
 PLACEHOLDER_CHARS = ["◯", "〇", "○"]  # 未確定プレースホルダ（自動公開させない）
@@ -58,12 +58,17 @@ def main() -> int:
     ap.add_argument("--include-drafts", action="store_true", help="draft も在庫として使う")
     ap.add_argument("--tz", default="Asia/Tokyo")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--per-day", type=int, default=None,
+                    help="1日あたりの本数を減らす（既定はプリセットの本数）。"
+                         "立ち上げ直後のアカウントは凍結されやすいので初動を抑えるときに使う")
     ap.add_argument("--start-today", action="store_true",
                     help="翌日からではなく当日から開始し、現在時刻以前のスロットは除外する")
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
 
     daily = PRESETS[args.preset]
+    if args.per_day is not None:
+        daily = limit_daily(daily, args.per_day)
     per_day = preset_posts_per_day(daily)
     sa_info = json.load(open(args.sa, encoding="utf-8"))
     tz = ZoneInfo(args.tz)

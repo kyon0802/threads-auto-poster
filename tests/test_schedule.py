@@ -287,3 +287,37 @@ if __name__ == "__main__":
     test_build_schedule_seizogyo2_via_preset()
     test_build_schedule_seizogyo3_via_preset()
     print("========== 全テスト PASS ==========")
+
+
+def test_limit_daily_windows_keeps_ends():
+    # 立ち上げ期に物量を抑えるための間引き。朝と夜（最初と最後の窓）が残ること。
+    from threads_poster.schedule import limit_daily, PRESETS
+    meguri = PRESETS["meguri"]
+    assert len(meguri["windows"]) == 4
+    two = limit_daily(meguri, 2)
+    assert two["windows"] == [meguri["windows"][0], meguri["windows"][-1]], two["windows"]
+    assert limit_daily(meguri, 1)["windows"] == [meguri["windows"][0]]
+    assert len(limit_daily(meguri, 3)["windows"]) == 3
+    assert limit_daily(meguri, 4)["windows"] == meguri["windows"]      # 同数なら素通し
+    assert limit_daily(meguri, 9)["windows"] == meguri["windows"]      # 超過も素通し
+    assert meguri["windows"] == PRESETS["meguri"]["windows"]           # 元を書き換えない
+    print("  ✓ limit_daily（windows型）＝端を残して均等に間引く OK")
+
+
+def test_limit_daily_noon_evening_keeps_noon():
+    from threads_poster.schedule import limit_daily, PRESETS
+    seizo = PRESETS["seizogyo"]
+    assert limit_daily(seizo, 2)["evening_count"] == 1     # 昼1＋夜1
+    assert limit_daily(seizo, 1)["evening_count"] == 0     # 昼1のみ
+    assert limit_daily(seizo, 99)["evening_count"] == seizo["evening_count"]
+    print("  ✓ limit_daily（昼夜型）＝昼を残して夜を減らす OK")
+
+
+def test_limit_daily_rejects_zero():
+    from threads_poster.schedule import limit_daily, PRESETS
+    try:
+        limit_daily(PRESETS["meguri"], 0)
+    except ValueError:
+        print("  ✓ per_day=0 は弾く OK")
+    else:
+        raise AssertionError("ValueError が出ませんでした")
