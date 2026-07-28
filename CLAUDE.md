@@ -12,8 +12,13 @@
 
 スプレッドシートに投稿を並べておくと、**複数のThreadsアカウントへ時間指定で自動投稿**するシステム。
 ツリー（リプライ連結）対応。サーバ管理ゼロ（GitHub Actions の無料cron で稼働）。
-現在は投稿だけでなく、**インサイト自動収集→分析→週次レポート（メール配信）→AIによる次サイクル投稿の自動生成**まで、3日PDCAサイクルの全自動運用に到達している。
+投稿だけでなく、**インサイト自動収集→分析→週次レポート（メール配信）→AIによる次サイクル投稿の自動生成**までを3日PDCAサイクルで回す。
 最終的にはオーナー（Master）のSNS運用代行業の「再利用可能な納品資産」にする。
+
+> ⚠️ **2026-07-28時点、生成は停止中**（Anthropic APIの残高切れで4サイクル連続失敗 → 全アカ在庫ゼロ）。
+> 復旧にはクレジット購入が必要。詳細と再発防止策は docs/CHANGELOG.md §27。
+> 「全自動運用に到達済み」と読める記述があったら、**その日の在庫を必ず実測で確認すること**
+> （`python3 main_monitor.py` を DRY相当の読取専用で実行できる）。
 
 これは3層構想の **第1層**。第2層（Threads→LINE導線）、第3層（LINE上でClaude自動鑑定）は後続フェーズ（§9）。
 
@@ -24,32 +29,39 @@
 ```
 スプレッドシート（事業ごとに1枚・投稿キュー＋アカウント/トークン＋インサイト＋ナレッジ）
         ↑ 読む / 結果(status, posted_id, インサイト, 分析, 生成投稿)を書き戻す
-GitHub Actions（すべて別systemの4本）
+GitHub Actions（すべて別systemの5本）
   post.yml    10分おき  → main.py         投稿の公開（Threads API）
   collect.yml 日次04:00 → main_collect.py インサイト収集（読み取り専用）
   weekly.yml  日次06:00 → main_weekly.py  3日サイクルゲート→分析→レポート→生成→メール
+  monitor.yml 日次08:00 → main_monitor.py 投稿在庫の監視（読取専用・異常時のみ通知）
   tests.yml   push/PR   → pytest tests/   検証専用（秘密不使用）
 ```
 
 設計判断と理由（変更時はここを尊重すること）:
 - **状態は全てスプレッドシートに集約** → GitHub Actions側を完全ステートレスにできる（Actionsのファイルシステムは毎回破棄されるため）。
-- **GitHub Actions cron** → VPS不要・無料。`concurrency` で直列化し多重起動による二重投稿を防止。post/collect/weekly は**別 concurrency グループ**＝互いに邪魔しない。
+- **GitHub Actions cron** → VPS不要・無料。`concurrency` で直列化し多重起動による二重投稿を防止。post/collect/weekly/monitor は**別 concurrency グループ**＝互いに邪魔しない。
 - **cronはUTC、投稿時刻判定はシート側のJST** で行う（混同しないこと）。
 - **多事業ルーティング**：Secret `BUSINESSES`（JSON配列 `[{"name","spreadsheet_id"},…]`）で事業ごとに独立した非公開シートをループ。無ければ `SPREADSHEET_ID` 単体にフォールバック（後方互換）。1事業の失敗で他事業は止めない（run全体は exit 2＝失敗通知）。
 - **安全装置を既定内蔵** → 1日上限（公式250より低い既定50）、冪等性（postedは再投稿しない）、write-ahead（公開前に `publishing`）、親未公開なら子は保留、生成は機械コンプラゲート通過分のみ、キルスイッチ `PAUSED=1`。
 
 ---
 
-## 2. 現在の運用状態（2026-07-03時点）
+## 2. 現在の運用状態（2026-07-28時点）
 
 - **repo**: `kyon0802/threads-auto-poster`（**公開**・§17厳守）。gh CLI は `/opt/homebrew/bin/gh`（アカウント kyon0802）。
-- **稼働事業（Secret `BUSINESSES`）**: `seizogyo`（製造業・`takumi_kojo_navi`）／ `uranai`（占い「結」・`miko_yui_musubi`）／ `seizogyo2`（製造業・**2アカ**：共感認知型 `tenshokuman`＋本音暴露型 `pashi`。2026-07-03/07追加、詳細 docs/CHANGELOG.md §26）。**`meguri`（占い「澪」）はコード実装済み・BUSINESSES未登録＝inert**（起動残タスクは §7）。
+- **稼働事業（Secret `BUSINESSES`）**: 3事業3アカウント。
+  - `seizogyo`（製造業・`takumi_kojo_navi`）
+  - `seizogyo2`（製造業・共感認知型 `tenshokuman`＝住田）
+  - `seizogyo3`（製造業・本音暴露型 `pashi`＝ぱし。2026-07-08にseizogyo2から分離＝**アカウント別シート**）
+- **廃止**: `uranai`（占い「結」・`miko_yui_musubi`）は 2026-07-28 に**廃止**。156投稿で累計227表示（平均1.5）とアカウント側の配信抑制が疑われたため、人格・アカウント名ごと終了。ナレッジのみローカルへ保全（占いThreads-note事業/結_アーカイブ_20260728）。**新しい占いアカウントは未定**。
+- **未起動**: `meguri`（占い「澪」・`mio_meguri`）はコード・シート・draft26本まで完成、**トークン未取得のためBUSINESSES未登録＝inert**。手順は非公開の起動手順書（§7）。
 - **3日PDCAサイクル**: weekly.yml は毎日叩くが `is_cycle_day`（起点 2026-06-28・3日周期）の日だけ本処理。各サイクルで「翌日から3日×4本/日」を生成→隙間なく連続。手動実行は `FORCE_CYCLE=1`。
-- **投稿スケジュール**: 事業別プリセット（`schedule.PRESETS`）で1日4本・ランダム配置・最低間隔30分。seizogyo=昼1＋夜3／uranai=午前1＋夕方〜深夜3／meguri=朝昼夕夜の4窓／seizogyo2=生活リズム4窓（朝通勤・昼休憩・夕帰宅・夜寝る前）。
-- **生成**: `GENERATE_POSTS=1`＋`ANTHROPIC_API_KEY`。`GEN_STATUS`=draft(人が確認)/queued(全自動公開)。生成前に必須タブゲート（§17e）、生成後に機械コンプラゲート。
+- **投稿スケジュール**: 事業別プリセット（`schedule.PRESETS`）で1日4本・ランダム配置・最低間隔30分。seizogyo=昼1＋夜3／meguri=朝昼夕夜の4窓／seizogyo2=生活リズム4窓（朝通勤・昼休憩・夕帰宅・夜寝る前）／seizogyo3=昼夕寄り4窓（seizogyo2と窓が重ならないことをテストで機械保証＝CIB配慮）。
+- **生成**: `GENERATE_POSTS=1`＋`ANTHROPIC_API_KEY`。`GEN_STATUS`=draft(人が確認)/queued(全自動公開)。**事業別に `GEN_STATUS_<NAME>` で上書き可**（製造業だけdraft等）。生成前に必須タブゲート（§17e）、生成後に機械コンプラゲート。**seizogyo2/seizogyo3 は `GEN_POSTS_*=0` で生成オフ（立ち上げ期の手動運用）。**
 - **メール**: `ENABLE_EMAIL=1` でアカウントごとに週次レポートを個別送信（宛先は Variable `MAIL_TO` / `MAIL_TO_<事業名>`・認証は Gmail アプリパスワード。実アドレスは公開repoに書かない＝§17b）。run失敗時はGitHub純正の失敗通知メールも飛ぶ。
-- **テスト**: `python3 -m pytest tests/ -q`（40本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。
-- **過去インシデントの教訓は §10 と docs/CHANGELOG.md（§13/§14/§16）**。特に「row_id 必須・全タブ一意」は絶対。
+- **在庫監視**: `monitor.yml`（日次 08:00 JST・読取専用）が各アカの未来在庫と残り日数を算出し、在庫ゼロ/残りわずかのときだけ【要確認】メールを送る。在庫ゼロの間は run を exit 2 で赤くする。**投稿ジョブは在庫ゼロでも成功で終わるため、停止を検知できる唯一の仕組み**（§10・docs/CHANGELOG.md §27）。
+- **テスト**: `python3 -m pytest tests/ -q`（79本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。
+- **過去インシデントの教訓は §10 と docs/CHANGELOG.md（§13/§14/§16/§27）**。特に「row_id 必須・全タブ一意」は絶対。
 
 ---
 
@@ -78,17 +90,21 @@ GitHub Actions（すべて別systemの4本）
 main.py                       投稿エントリ（post.yml から10分おき）
 main_collect.py               インサイト収集エントリ（collect.yml から日次・読み取り専用）
 main_weekly.py                週次エントリ（weekly.yml から日次→3日サイクルゲート）
+main_monitor.py               在庫監視エントリ（monitor.yml から日次・読取専用）
 bootstrap_token.py            初回の短期→長期トークン交換ヘルパー
 threads_poster/
   threads_api.py              ThreadsClient（container/publish/insights/トークン。状態を持たない）
+                              ★HTTPは http_request() が唯一の入口。例外のトークンをマスクする（§17b）
   sheets.py                   Store抽象 + GoogleSheetStore(本番・batch書込・with_retry) + MemoryStore(テスト)
   publisher.py                公開ロジック（時刻判定/ツリー/レート制限/write-ahead/冪等性）
   collector.py                インサイト日次収集（Publisher対称・読み取り専用）
-  analyzer.py                 実績集計（時間帯/曜日/本文長/ツリー別・純関数・AI不使用）
+  analyzer.py                 実績集計（純関数・AI不使用）。analyze_windowed=直近7日/前7日/累計、傾向は28日窓
+  inventory.py                投稿在庫（ランウェイ）の算出（純関数・週次レポートと在庫監視で共用）
+  errors.py                   失敗理由の分類（残高不足/認証/レート/一時障害・純関数）
   reporter.py                 週次レポートのタブ追記＋Markdownミラー（AI不使用）
   generator.py                AI投稿生成（Claude・必須タブゲート＋コンプラゲート・schedule_fn注入）
   strategy.py                 来週方針＋投稿例の生成（レポート用・読み取り専用）
-  schedule.py                 1日N本ランダム配置（PRESETS: seizogyo/uranai/meguri・rng注入）
+  schedule.py                 1日N本ランダム配置（PRESETS: seizogyo/seizogyo2/seizogyo3/meguri・rng注入）
   compliance.py               機械コンプラゲート（NGワード/URL/文字数・決定的）
   html_report.py              週次レポートHTML（メール対応・インラインCSS）
   mailer.py                   SMTP(SSL)送信（certifi・smtp_factory注入）
@@ -105,11 +121,12 @@ scripts/                      ローカルで人が実行するセットアッ�
   batch_to_csv.py             content→sheetブリッジ（立ち上げバッチMd→posts CSV）
   sync_knowledge.py           ローカルナレッジ→ナレッジ_タブ同期
   local_run.sh                .env読込→DRY_RUN既定でローカル実行
-tests/                        テスト（API不要・モック・40本）。pytest でも直実行でも可
+tests/                        テスト（API不要・モック・79本）。pytest でも直実行でも可
   test_logic.py / test_collect.py / test_phase2.py / test_schedule.py
+  test_report_window.py（期間窓・在庫・エラー分類） / test_monitor.py / test_threads_api_masking.py
 sheet_templates/              accounts.csv / posts.csv / posts_example.csv（記入例）
-docs/CHANGELOG.md             時系列の改修履歴（旧CLAUDE.md §11〜§25）
-.github/workflows/            post.yml / collect.yml / weekly.yml / tests.yml
+docs/CHANGELOG.md             時系列の改修履歴（旧CLAUDE.md §11〜§25 ＋ §26以降）
+.github/workflows/            post.yml / collect.yml / weekly.yml / monitor.yml / tests.yml
 requirements.txt / .env.example / README.md / SETUP.md
 ```
 
@@ -158,17 +175,20 @@ requirements.txt / .env.example / README.md / SETUP.md
 | `SPREADSHEET_ID` | Secret | 単一シートのフォールバック（後方互換・即ロールバック用） |
 | `ANTHROPIC_API_KEY` | Secret | AI生成（generator/strategy）有効時に必須 |
 | `MAIL_USERNAME` / `MAIL_PASSWORD` | Secret | Gmail送信（アプリパスワード） |
-| `MAX_POSTS_PER_DAY` | Variable | 1アカウント1日上限（既定50） |
+| `MAX_POSTS_PER_DAY` | Variable | 1アカウント1日上限（コード既定50・**現在の実設定は5**） |
 | `TREE_REPLY_DELAY_SEC` | Variable | ツリー返信の間隔秒（既定30） |
 | `LOOKBACK_DAYS` | Variable | 収集対象の過去日数（既定60） |
 | `PAUSED` | Variable | **キルスイッチ**。1で投稿・生成を即停止 |
 | `GENERATE_POSTS` | Variable | 1で生成有効（既定0＝分析とレポートのみ） |
 | `GEN_STATUS` | Variable | draft=人が確認（既定）/ queued=全自動公開 |
+| `GEN_STATUS_<NAME>` | Variable | **事業別の上書き**（例 `GEN_STATUS_SEIZOGYO=draft`）。空なら `GEN_STATUS` |
 | `GEN_POSTS_PER_ACCOUNT` | Variable | 4本/日対象外の事業の生成本数（既定5） |
-| `GEN_POSTS_SEIZOGYO` / `GEN_POSTS_URANAI` / `GEN_POSTS_MEGURI` | Variable | 事業別の生成本数（既定12=3日×4本） |
+| `GEN_POSTS_<NAME>` | Variable | 事業別の生成本数（既定12=3日×4本）。**0でその事業だけ生成オフ**。現在 SEIZOGYO2/SEIZOGYO3/MEGURI=0 |
 | `GEN_MODEL` | Variable | 生成モデル（既定 claude-opus-4-8） |
 | `FORCE_CYCLE` | Variable | 1で3日サイクルゲートをバイパス（手動実行用） |
 | `ENABLE_EMAIL` / `EMAIL_BUSINESSES` / `MAIL_TO` | Variable | 週次メール配信（EMAIL_BUSINESSES空=全事業） |
+| `MAIL_TO_<NAME>` | Variable | **事業別の宛先**（カンマ区切りで複数可）。空なら `MAIL_TO` |
+| `RUNWAY_WARN_DAYS` | Variable | 在庫の残り日数がこれ以下で警告（既定2・monitor.yml） |
 | `TZ_NAME` | env | 既定 Asia/Tokyo |
 | `DRY_RUN` | env(ローカル) | "1" で無書込実行（検証用） |
 | `THREADS_CLIENT_SECRET` | env(ローカル) | bootstrap_token.py 実行時のみ |
@@ -179,14 +199,21 @@ requirements.txt / .env.example / README.md / SETUP.md
 
 ## 7. 次にやること（ロードマップ / 優先順）
 
-1. **★澪（meguri）の起動（HITL・コードは実装済みで inert）**:
-   ①ユーザーが新Threadsアカ作成＋トークン取得（手順=docs/CHANGELOG.md §15）
-   ②専用シートをサービスアカウントに共有 → scratchpad の `build_mio_sheet.py --apply`（タブ構築＋curation＋26投稿draft投入）
-   ③accounts にトークン登録＋Secret `BUSINESSES` に3事業目追加
-   ④初回サイクルを fill（`--preset meguri --start-today`）
-   再開手順の正本 = `占いThreads-note事業/澪_新アカ立ち上げ/_次回ここから_RESUME.md`。暦の正確性（縁起日/節気の実データ参照）は要対応。
-2. 安定運用の観察: 製造業は過去2回BAN・`GEN_STATUS=queued`（無確認自動公開）のため物量増に伴う凍結リスクを監視（必要なら draft 運用へ）。
-3. 安定後、テンプレ化し他クライアントへ複製。**第三者運用／販売の段階で初めて App Review を申請**（Phase E）。
+0. **★障害復旧（最優先・2026-07-28発生）**: Anthropic APIの残高切れで生成が4サイクル連続失敗し、
+   全アカウントの在庫がゼロ。クレジット購入 → `threads-weekly-report` を手動実行で復旧する。
+   Auto-reload を有効にすれば恒久解決（詳細と経緯は docs/CHANGELOG.md §27）。
+1. **★澪（meguri）の起動（HITL・コードとシートは完成、トークン待ちで inert）**:
+   ①テスター追加 → 認可 → 長期トークン取得（`scripts/get_auth_url.py` → `scripts/exchange_token.py`）
+   ②accounts にトークン登録 ③Secret `BUSINESSES` に meguri 追加 ④`fill_week_schedule.py --preset meguri`
+   **起動時は `GEN_POSTS_MEGURI=0`（設定済み）のまま draft26本を消化する**のが安全。
+   手順の正本 = 非公開ローカル `占いThreads-note事業/澪_新アカ立ち上げ/_トークン取得と起動手順_20260728.md`
+   （シートID・アプリIDを含むため公開repoには置かない＝§17b）。暦の正確性（縁起日/節気）は宿題。
+2. **占いの新アカウント設計**: 「結」廃止に伴い占い枠が空いている。ナレッジは保全済み
+   （`占いThreads-note事業/結_アーカイブ_20260728`）。人格・アカウント名は再利用しない方針。
+3. seizogyo2/seizogyo3（住田・ぱし）の自動生成をONにするか判断（現在 `GEN_POSTS_*=0` で停止中）。
+   ぱしは平均797表示/本と数字が出ているため再開の価値が高い。
+4. 安定運用の観察: 製造業は過去2回BAN。`GEN_STATUS_SEIZOGYO=draft` で人の確認を挟む運用も選べる。
+5. 安定後、テンプレ化し他クライアントへ複製。**第三者運用／販売の段階で初めて App Review を申請**（Phase E）。
 
 ## 8. 未決定事項（Masterに確認すべき）
 
@@ -220,7 +247,12 @@ requirements.txt / .env.example / README.md / SETUP.md
 - **「今すぐ公開」になる行があるときに手作業でシートを編集しない**（10分cronとレースして二重投稿の原因＝docs/CHANGELOG.md §16）。整備は**未来時刻の行**に対して行う。
 - **障害の切り分け（docs/CHANGELOG.md §13/§14）**: Meta側の `OAuthException code 200 "API access blocked"` ＝アプリ/アカウント主体のブロック→**Threadsアプリで人が承認解除**が必須。Google Sheets の 5xx/429 ＝一過性→`with_retry` が自動回復。トークン失効は code 190（別物）。切り分けは「シートからトークンを読み `GET /v1.0/me` を `requests` で叩く」（urllibはmacOSのSSLで不可）。
 - Sheets への書込は batch 化済み（行単位 update_cells / 一括 append_rows）。**投稿ごとに get_all_records を呼ぶ実装は Read/min 429 に当たる**ので書かない（docs/CHANGELOG.md §19）。
-- `actions/checkout@v4`・`setup-python@v5` の Node20 非推奨警告（2026-09-16撤去予定。動作は継続）。
+- **投稿ジョブは在庫ゼロでも「成功」で終わる。** Actions が緑でも投稿が出ているとは限らない。
+  在庫の有無は `monitor.yml`（日次）か `python3 main_monitor.py`（読取専用）で確認する。
+  2026-07にこれで4アカウントの停止を9〜19日見逃した（docs/CHANGELOG.md §27）。
+- **失った日数を取り戻そうと、過去日時の行をまとめて queued にしない。** 単発投稿の間にウェイトが
+  無いため1回の実行で最大 `MAX_POSTS_PER_DAY` 本が数秒間隔で連射され、BAN歴のあるアカで
+  スパム判定を誘発する。そもそもThreadsは過去日時に投稿できず穴は埋まらない。
 
 ---
 
