@@ -13,7 +13,10 @@ import os
 import sys
 import urllib.parse
 
-DEFAULT_SCOPE = "threads_basic,threads_content_publish"
+# 投稿(threads_content_publish)だけでなく、インサイト収集(threads_manage_insights)も
+# 最初から要求する。過去に投稿スコープだけで取得してしまい、収集を始める段階で
+# 両アカウントのトークンを取り直す羽目になった（docs/CHANGELOG.md §19）。
+DEFAULT_SCOPE = "threads_basic,threads_content_publish,threads_manage_insights"
 
 
 def main() -> int:
