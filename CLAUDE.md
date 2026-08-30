@@ -15,10 +15,14 @@
 投稿だけでなく、**インサイト自動収集→分析→週次レポート（メール配信）→AIによる次サイクル投稿の自動生成**までを3日PDCAサイクルで回す。
 最終的にはオーナー（Master）のSNS運用代行業の「再利用可能な納品資産」にする。
 
-> ⚠️ **2026-07-28時点、生成は停止中**（Anthropic APIの残高切れで4サイクル連続失敗 → 全アカ在庫ゼロ）。
-> 復旧にはクレジット購入が必要。詳細と再発防止策は docs/CHANGELOG.md §27。
-> 「全自動運用に到達済み」と読める記述があったら、**その日の在庫を必ず実測で確認すること**
-> （`python3 main_monitor.py` を DRY相当の読取専用で実行できる）。
+> ⚠️ **2026-08-31時点、生成は停止したまま（1ヶ月以上・未解決）**。Anthropic APIの残高切れで
+> 全アカ在庫ゼロ。2026-08-31 04:29 JST に preflight で再実測しても **なお「残高不足」**。
+> 停止日数＝takumi 42日／住田 52日／ぱし 48日／澪 20日（澪は07-29に起動しローンチ26本を撃ち切った後、
+> `GEN_POSTS_MEGURI=0` のため補充されず停止）。詳細は docs/CHANGELOG.md §27・§28。
+> **復旧にはクレジット購入が必要（前払い残高方式。請求の未納が無くても残高を使い切ると止まる）。**
+> 「全自動運用に到達済み」と読める記述があったら、**その日の状態を必ず実測で確認すること**：
+> - 生成が動くか → **`preflight.yml` を手動実行**（副作用ゼロ・数十秒で残高/認証を切り分け）
+> - 投稿在庫があるか → `python3 main_monitor.py`（読取専用）
 
 これは3層構想の **第1層**。第2層（Threads→LINE導線）、第3層（LINE上でClaude自動鑑定）は後続フェーズ（§9）。
 
@@ -29,11 +33,12 @@
 ```
 スプレッドシート（事業ごとに1枚・投稿キュー＋アカウント/トークン＋インサイト＋ナレッジ）
         ↑ 読む / 結果(status, posted_id, インサイト, 分析, 生成投稿)を書き戻す
-GitHub Actions（すべて別systemの5本）
+GitHub Actions（すべて別systemの6本）
   post.yml    10分おき  → main.py         投稿の公開（Threads API）
   collect.yml 日次04:00 → main_collect.py インサイト収集（読み取り専用）
   weekly.yml  日次06:00 → main_weekly.py  3日サイクルゲート→分析→レポート→生成→メール
   monitor.yml 日次08:00 → main_monitor.py 投稿在庫の監視（読取専用・異常時のみ通知）
+  preflight.yml 手動のみ → main_preflight.py 生成AIの疎通/残高チェック（副作用ゼロ）
   tests.yml   push/PR   → pytest tests/   検証専用（秘密不使用）
 ```
 
@@ -91,6 +96,9 @@ main.py                       投稿エントリ（post.yml から10分おき）
 main_collect.py               インサイト収集エントリ（collect.yml から日次・読み取り専用）
 main_weekly.py                週次エントリ（weekly.yml から日次→3日サイクルゲート）
 main_monitor.py               在庫監視エントリ（monitor.yml から日次・読取専用）
+main_preflight.py             生成AIの事前疎通チェック（preflight.yml から手動・副作用ゼロ）
+                              max_tokens=1 を1回投げ「残高不足/認証エラー/…」に分類する。
+                              本番の週次を撃たずに「今動くか」を確かめる唯一の手段
 bootstrap_token.py            初回の短期→長期トークン交換ヘルパー
 threads_poster/
   threads_api.py              ThreadsClient（container/publish/insights/トークン。状態を持たない）
@@ -130,7 +138,8 @@ sheet_templates/              accounts.csv / posts.csv / posts_example.csv（記
                               data-analyst / content-strategist / compliance-reviewer /
                               code-reviewer / qa-engineer）。公開repoなので事業ノウハウは書かない（§17b）
 docs/CHANGELOG.md             時系列の改修履歴（旧CLAUDE.md §11〜§25 ＋ §26以降）
-.github/workflows/            post.yml / collect.yml / weekly.yml / monitor.yml / tests.yml
+.github/workflows/            post.yml / collect.yml / weekly.yml / monitor.yml /
+                              preflight.yml / tests.yml
 requirements.txt / .env.example / README.md / SETUP.md
 ```
 
