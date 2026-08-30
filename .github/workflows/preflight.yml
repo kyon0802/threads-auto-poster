@@ -25,8 +25,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      # errors.py 自体は外部依存ゼロだが、threads_poster/__init__.py が
+      # threads_api(requests)/sheets(gspread) を先に読み込むため他ジョブと同じ依存を入れる。
+      # （入れるだけでシートにも Threads にも一切アクセスしない＝副作用ゼロは変わらない）
       - name: Install deps
-        run: pip install anthropic
+        run: pip install -r requirements.txt anthropic
 
       - name: Check generation API (副作用なし・最小リクエスト1回)
         env:
