@@ -1,0 +1,37 @@
+name: threads-preflight-check
+
+# 生成AI（Anthropic）が今この瞬間叩けるかだけを確かめる手動チェック。
+# シート読み書き・メール・投稿生成を一切行わない副作用ゼロの検査なので、
+# 「残高を入れた。もう動く？」を本番の週次を撃たずに即座に確かめられる。
+# （2026-07-28の全アカ停止＝残高切れを、確認手段が無いまま1ヶ月放置した反省から追加）
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: threads-preflight
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install anthropic
+
+      - name: Check generation API (副作用なし・最小リクエスト1回)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # 本番の週次と同じ既定値。実際に生成で使うモデルを検査する
+          # （モデルIDが古くなった場合もここで判明する）。
+          GEN_MODEL: ${{ vars.GEN_MODEL || 'claude-opus-4-8' }}
+        run: python main_preflight.py
