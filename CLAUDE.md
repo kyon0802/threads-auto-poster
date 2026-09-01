@@ -134,6 +134,7 @@ scripts/                      ローカルで人が実行するセットアッ�
   setup_post_tab.py / check_sheet.py / reschedule_posts.py / fill_week_schedule.py
   batch_to_csv.py             content→sheetブリッジ（立ち上げバッチMd→posts CSV）
   sync_knowledge.py           ローカルナレッジ→ナレッジ_タブ同期
+  add_pdca_columns.py         PDCA移行: 投稿タブ3列追加＋お手本DB/仮説ログ作成（冪等・DRY-RUN既定）
   local_run.sh                .env読込→DRY_RUN既定でローカル実行
 tests/                        テスト（API不要・モック・79本）。pytest でも直実行でも可
   test_logic.py / test_collect.py / test_phase2.py / test_schedule.py
@@ -164,7 +165,7 @@ requirements.txt / .env.example / README.md / SETUP.md
 `アカウント`(account) / `ユーザーID`(user_id) / `アクセストークン`(access_token) / `トークン更新日時`(token_updated_at) / `本日投稿数`(daily_count) / `カウント日付`(daily_count_date)
 
 **投稿タブ = アカウントごとに分割**。タブ名 **`投稿_<アカウント名>`**（`<アカウント名>`は accounts の `アカウント` と一致。**アカウントはタブ名から自動判定するので「アカウント」列は持たない**）。見出し:
-`投稿ID`(row_id) / `投稿日時`(post_datetime, JST `YYYY-MM-DD HH:MM`・文字列書式) / `本文`(text) / `メディア種類`(media_type, TEXT/IMAGE/VIDEO/CAROUSEL) / `メディアURL`(media_url) / `返信先ID`(reply_to=親の投稿ID) / `返信できる人`(reply_control) / `状態`(status) / `投稿後ID`(posted_id) / `投稿実施日時`(posted_at) / `エラー`(error)
+`投稿ID`(row_id) / `投稿日時`(post_datetime, JST `YYYY-MM-DD HH:MM`・文字列書式) / `本文`(text) / `メディア種類`(media_type, TEXT/IMAGE/VIDEO/CAROUSEL) / `メディアURL`(media_url) / `返信先ID`(reply_to=親の投稿ID) / `返信できる人`(reply_control) / `状態`(status) / `投稿後ID`(posted_id) / `投稿実施日時`(posted_at) / `エラー`(error) / `フック型`(hook_type) / `内容型`(content_type) / `参照お手本ID`(exemplar_ref)
 
 **システムが自動生成/管理するタブ**:
 - `インサイト_<acc>` … 投稿別インサイトの日次スナップショット（posted_id×取得日で冪等）
@@ -176,6 +177,8 @@ requirements.txt / .env.example / README.md / SETUP.md
 - `プロフィール_<acc>`（項目/内容） … 声・トーン・テーマ・お手本・アカ固有NG
 - `ガイドライン`（分類/ルール/重大度・事業共通） … 規約/法令/NGワード/過去BAN教訓。「NGワード」分類の行が機械ゲートの禁止語源
 - `ナレッジ_<acc>`（A列チャンク） … 事業ナレッジ全文（あれば最優先の知識源）
+- `お手本DB_<acc>`（お手本ID/出典/本文/フック型/内容型/ポジション近接度/実測数/状態/退役理由/メモ/収集日） … 勝ちパターンDB。自アカ当たり/滑り＋競合の当たり投稿。生成は `状態=active` のみ参照。設計は docs/superpowers/specs/2026-09-01-pdca-closed-loop-design.md
+- `仮説ログ`（日付/仮説/検証方法/結果/次アクション） … サイクルごとのPDCA記録（第1段は人が記入・第2段で自動追記）
 
 運用ルール:
 - `状態` は空 or `queued` で投入 → システムが `posted`/`error` を書き戻す。公開直前に `publishing`（write-ahead）。`publishing` のまま残った行は中断痕＝**Threads側を確認してから**空に戻す。`draft`=生成直後（人が queued に変えるまで公開されない）。`retired`=退避（公開対象外）。
