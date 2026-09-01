@@ -43,7 +43,7 @@ def _normalize_candidates(candidates: list) -> list[dict]:
 
 
 def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: dict, n: int,
-                 knowledge: str = "") -> str:
+                 knowledge: str = "", exemplars: list[dict] | None = None) -> str:
     guide = "\n".join(f"- [{g.get('重大度')}] {g.get('分類')}: {g.get('ルール')}" for g in guideline)
     wins = []
     for axis, key in [("時間帯", "by_time"), ("本文長", "by_length"), ("ツリー有無", "by_tree")]:
@@ -51,13 +51,47 @@ def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: d
         best = max(cand, key=lambda t: (t[3] if isinstance(t[3], (int, float)) else -1), default=None)
         if best:
             wins.append(f"{axis}は「{best[0]}」が好調")
-    # 知識源：ナレッジ全文（最優先・濃い）があればそれを、無ければプロフィールを使う
     if knowledge.strip():
         know_section = ("## 事業ナレッジ（最重要・このアカウントの全知識。声・戦略・合法ライン・"
                         "勝ち筋・フック型・KGI/CVRを含む。これを土台に作る）\n" + knowledge.strip())
     else:
         prof = "\n".join(f"- {k}: {v}" for k, v in profile.items())
         know_section = "## プロフィール\n" + prof
+
+    # ── 実績の実物（勝ち/負けの対比・PDCA閉ループの中核）────────────────────
+    def _fmt(entries, label):
+        lines = []
+        for e in (entries or [])[:3]:
+            text = str(e.get("text") or "").strip()
+            if text:
+                lines.append(f"◆{label}（表示{e.get('views', 0)}回）\n{text}")
+        return lines
+    real = _fmt(analysis.get("trend_top"), "勝ち") + _fmt(analysis.get("trend_bottom"), "負け")
+    real_section = ("## 実績の実物（直近28日・勝ちと負けの差から学ぶ。負けの真似は禁止）\n"
+                    + "\n\n".join(real) + "\n\n") if real else ""
+
+    # ── お手本DB（active のみ・最大7本・別ポジは構造だけ参考）─────────────────
+    ex_lines = []
+    for ex in (exemplars or []):
+        if str(ex.get("status") or "active").strip() == "retired":
+            continue
+        caution = ("※別ポジの参考：フックと構造のみ真似る。声・主張・内容はコピーしない"
+                   if str(ex.get("position") or "") == "別ポジ" else "")
+        ex_lines.append(f"[{ex.get('exemplar_id')}]（出典:{ex.get('source')}／フック型:{ex.get('hook_type')}）{caution}\n"
+                        f"{str(ex.get('text') or '').strip()}")
+        if len(ex_lines) >= 7:
+            break
+    ex_section = ("## お手本DB（模倣した手本のIDを exemplar_id で必ず申告する）\n"
+                  + "\n\n".join(ex_lines) + "\n\n") if ex_lines else ""
+
+    type_section = (
+        "## 型ラベルと探索枠（全投稿に必ず自己申告）\n"
+        f"- フック型: {' / '.join(HOOK_TYPES)}（探索枠では新しい型を短い名前で自由命名可）\n"
+        f"- 内容型: {' / '.join(CONTENT_TYPES)}\n"
+        f"- {n}本のうち2〜3本は**探索枠**＝上の実績に無い新しいフック・切り口を意図的に試す\n"
+        "- 各投稿の出力は text / hook_type / content_type / exemplar_id（模倣元。無ければ空文字）\n"
+    )
+
     return (
         f"あなたはThreadsアカウント「{account}」の専属コンテンツ戦略担当です。\n"
         f"下記の事業ナレッジとガイドライン（規約・法令・NG）を**厳守**し、\n"
@@ -65,13 +99,21 @@ def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: d
         f"翌週の投稿案を{n}本作成してください。\n\n"
         f"{know_section}\n\n"
         f"## ガイドライン（厳守・違反した投稿は機械的に破棄される）\n{guide}\n\n"
-        f"## 実績の勝ちパターン\n" + ("／".join(wins) if wins else "（データ蓄積中・お手本の型を踏襲）") + "\n\n"
+        f"## 実績の勝ちパターン（集計）\n" + ("／".join(wins) if wins else "（データ蓄積中・お手本の型を踏襲）") + "\n\n"
+        f"{real_section}"
+        f"{ex_section}"
+        f"{type_section}\n"
         f"{THREADS_HOOK_RULES}\n\n"
         f"## 出力要件\n"
         f"- 各投稿は独立した完成本文（そのまま投稿できる形）\n"
         f"- NGワードは絶対に使わない／本文に外部URLを書かない（誘導はプロフィール動線）\n"
         f"- ナレッジの声と勝ち筋・フック型を踏襲\n"
     )
+
+
+# 型ラベルの語彙（生成の自己申告と第2段の配分計算が共有する。新型は探索枠で自由命名可）
+HOOK_TYPES = ["数字提示", "心の声", "逆張り", "失敗談", "問いかけ", "場面描写"]
+CONTENT_TYPES = ["情報提供", "共感", "暴露", "求人紹介"]
 
 
 # Threads の表示回数を左右する最重要原則（運営者の実運用知見・全事業共通）。
@@ -122,7 +164,9 @@ class Generator:
         ng = extract_ng_words(guideline)
 
         if candidates is None:
-            prompt = build_prompt(self.account, profile, guideline, analysis, self.n_posts, knowledge=knowledge)
+            exemplars = self.store.get_exemplars(self.account)
+            prompt = build_prompt(self.account, profile, guideline, analysis, self.n_posts,
+                                  knowledge=knowledge, exemplars=exemplars)
             candidates = self.generate_fn(prompt)
 
         candidates = _normalize_candidates(candidates)

@@ -418,6 +418,30 @@ def test_generator_writes_type_labels():
     print("  ✓ generator が型ラベル（フック型/内容型/参照お手本ID）を投稿行に書く OK")
 
 
+def test_build_prompt_injects_examples_and_types():
+    """勝ち/負け本文・お手本・型指示・探索枠がプロンプトに入る。retired お手本は除外。"""
+    from threads_poster.generator import build_prompt
+    analysis = {
+        "trend_top": [{"posted_id": "p1", "views": 1200, "text": "勝った本文サンプル"}],
+        "trend_bottom": [{"posted_id": "p9", "views": 3, "text": "滑った本文サンプル"}],
+    }
+    exemplars = [
+        {"exemplar_id": "ex-001", "source": "自アカ", "text": "お手本アクティブ",
+         "hook_type": "数字提示", "position": "同ポジ", "status": "active"},
+        {"exemplar_id": "ex-002", "source": "競合A", "text": "お手本リタイア",
+         "hook_type": "逆張り", "position": "別ポジ", "status": "retired"},
+    ]
+    p = build_prompt("a1", {"声": "テスト"}, [{"分類": "NG", "ルール": "絶対", "重大度": "高"}],
+                     analysis, 12, exemplars=exemplars)
+    assert "勝った本文サンプル" in p and "1200" in p
+    assert "滑った本文サンプル" in p
+    assert "ex-001" in p and "お手本アクティブ" in p
+    assert "お手本リタイア" not in p          # retired は渡さない
+    assert "数字提示" in p and "探索枠" in p   # 型語彙と探索枠の指示
+    assert "exemplar_id" in p                  # 模倣元の自己申告指示
+    print("  ✓ build_prompt が勝ち/負け本文・お手本DB・型指示・探索枠を注入する OK")
+
+
 if __name__ == "__main__":
     print("=== Phase 2 テスト ===")
     test_analyze()
@@ -446,4 +470,5 @@ if __name__ == "__main__":
     test_posts_aliases_have_label_columns()
     test_memorystore_get_exemplars_default_and_set()
     test_generator_writes_type_labels()
+    test_build_prompt_injects_examples_and_types()
     print("========== 全テスト PASS ==========")
