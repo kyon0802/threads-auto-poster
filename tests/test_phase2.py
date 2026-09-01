@@ -378,6 +378,27 @@ def test_build_prompt_includes_guideline():
     print("  ✓ build_prompt（プロフィール/ガイドライン/勝ちパターンを内包）OK")
 
 
+def test_posts_aliases_have_label_columns():
+    """型ラベル3列がエイリアス層にあり、新規タブの見出しに含まれる（既存列順は不変）。"""
+    from threads_poster.sheets import POSTS_FIELD_ALIASES, per_account_post_headers
+    headers = per_account_post_headers()
+    assert headers[:3] == ["投稿ID", "投稿日時", "本文"], headers  # 既存先頭は不変
+    for col in ("フック型", "内容型", "参照お手本ID"):
+        assert col in headers, headers
+    assert POSTS_FIELD_ALIASES["hook_type"][0] == "フック型"
+    assert POSTS_FIELD_ALIASES["exemplar_ref"][0] == "参照お手本ID"
+    print("  ✓ 型ラベル3列がエイリアス層に存在（見出し順序保証）OK")
+
+
+def test_memorystore_get_exemplars_default_and_set():
+    from threads_poster.sheets import MemoryStore
+    store = MemoryStore([{"account": "a1"}], [])
+    assert store.get_exemplars("a1") == []          # 未設定＝空（生成は従来どおり動く）
+    store.exemplars = {"a1": [{"exemplar_id": "ex-001", "text": "お手本本文", "status": "active"}]}
+    assert store.get_exemplars("a1")[0]["exemplar_id"] == "ex-001"
+    print("  ✓ MemoryStore.get_exemplars（デフォルト空・セット/取得）OK")
+
+
 if __name__ == "__main__":
     print("=== Phase 2 テスト ===")
     test_analyze()
@@ -403,4 +424,6 @@ if __name__ == "__main__":
     test_n_posts_for_4perday_businesses()
     test_uranai_schedule_fn_uses_morning_evening()
     test_build_prompt_includes_guideline()
+    test_posts_aliases_have_label_columns()
+    test_memorystore_get_exemplars_default_and_set()
     print("========== 全テスト PASS ==========")

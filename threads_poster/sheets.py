@@ -90,6 +90,10 @@ POSTS_FIELD_ALIASES = {
     "posted_id":     ["投稿後ID", "posted_id"],
     "posted_at":     ["投稿実施日時", "posted_at"],
     "error":         ["エラー", "error"],
+    # ★PDCA型ラベル（2026-09-01）。生成AIが自己申告し、A/B検証（型×実測）の紐付けに使う。
+    "hook_type":    ["フック型", "hook_type"],
+    "content_type": ["内容型", "content_type"],
+    "exemplar_ref": ["参照お手本ID", "exemplar_ref"],  # 模倣5連敗ルール（設計書）の判定キー
 }
 
 # アカウント別の投稿タブ名は「投稿_<account>」。<account> は accounts タブのアカウント名と一致させる。
@@ -134,6 +138,23 @@ PROFILE_TAB_PREFIX = "プロフィール_"               # 声/テーマ/お手�
 GUIDELINE_TAB = "ガイドライン"                      # 規約/法令/NGワード（事業共通・人が curation）
 WEEKLY_REPORT_TAB = "週次レポート"                   # 週次サマリ（システム追記）
 KNOWLEDGE_TAB_PREFIX = "ナレッジ_"                  # 生成エンジンが読む事業ナレッジ全文（非公開シートのみ・§17b）
+EXEMPLAR_TAB_PREFIX = "お手本DB_"   # 勝ちパターンDB（自アカ当たり/滑り＋競合。人＋AIが curation）
+HYPOTHESIS_TAB = "仮説ログ"          # サイクルごとの仮説→結果（システム追記＋人が手書き可）
+
+EXEMPLAR_FIELD_ALIASES = {
+    "exemplar_id":   ["お手本ID", "exemplar_id"],
+    "source":        ["出典", "source"],                  # "自アカ" または競合名
+    "text":          ["本文", "text"],
+    "hook_type":     ["フック型", "hook_type"],
+    "content_type":  ["内容型", "content_type"],
+    "position":      ["ポジション近接度", "position"],     # 同ポジ/近接/別ポジ
+    "metric":        ["実測数", "metric"],                 # 自アカ=views・競合=likes
+    "status":        ["状態", "status"],                   # active / retired
+    "retire_reason": ["退役理由", "retire_reason"],
+    "note":          ["メモ", "note"],
+    "collected_at":  ["収集日", "collected_at"],
+}
+HYPOTHESIS_HEADER = ["日付", "仮説", "検証方法", "結果", "次アクション"]
 
 
 def canonical_headers(aliases: dict) -> list[str]:
@@ -186,6 +207,10 @@ class Store(ABC):
         新しい投稿が追記された後に呼ぶと「新しい日付が上」を保てる。順序は row_id で識別する
         公開ロジックに影響しない（見た目だけ）。"""
         return None
+
+    def get_exemplars(self, account: str) -> list[dict]:
+        """お手本DB（勝ちパターンDB）。既定は空＝DBが無くても生成は従来どおり動く。"""
+        return []
 
 
 # ---------------- 本番: Google Sheets ----------------
@@ -427,6 +452,14 @@ class GoogleSheetStore(Store):
         col = with_retry(lambda: ws.col_values(1))
         return "\n".join(c for c in col[1:] if c)  # 1行目はヘッダ
 
+    def get_exemplars(self, account: str) -> list[dict]:
+        recs = self._read_tab_raw(f"{EXEMPLAR_TAB_PREFIX}{account}")
+        if not recs:
+            return []
+        to_internal, _ = header_maps(list(recs[0].keys()), EXEMPLAR_FIELD_ALIASES)
+        out = [{to_internal.get(k, k): v for k, v in r.items()} for r in recs]
+        return [r for r in out if str(r.get("text") or "").strip()]
+
     def write_analysis(self, account: str, header: list[str], rows: list[list]) -> None:
         title = f"{INSIGHTS_ANALYSIS_TAB_PREFIX}{account}"
         ws = self._get_or_create_ws(title, header)
@@ -563,3 +596,6 @@ class MemoryStore(Store):
         rec = dict(fields)
         rec["account"] = account
         self.posts.append(rec)
+
+    def get_exemplars(self, account: str) -> list[dict]:
+        return list(getattr(self, "exemplars", {}).get(account, []))
