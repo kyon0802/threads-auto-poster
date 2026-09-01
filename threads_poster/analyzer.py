@@ -134,6 +134,10 @@ def analyze_insights(rows: list[dict]) -> dict:
     er_posts = [r for r in posts if _has_er(r)]
     top_er = sorted(er_posts, key=lambda r: _f(r.get("engagement_rate")), reverse=True)[:5]
     out["top_er"] = [_entry(r) for r in top_er]
+    # 負けランキング（views昇順ワースト3）。勝ち例だけでなく負け例を生成AIに対比で見せる
+    # ためのもの（PDCA設計 2026-09-01）。views=0 の投稿こそ負け筆頭なので除外しない。
+    bottom = sorted(posts, key=lambda r: _i(r.get("views")))[:3]
+    out["bottom"] = [_entry(r) for r in bottom]
     return out
 
 
@@ -193,6 +197,9 @@ def analyze_windowed(rows: list[dict], *, now: datetime,
     for key in ("by_time", "by_weekday", "by_length", "by_tree"):
         out[key] = trend[key]
     out["trend_n_posts"] = trend["n_posts"]
+    # 生成プロンプト注入用の勝ち/負け実物（28日窓。7日窓では12本しかなくサンプル不足のため）
+    out["trend_top"] = trend["top"]
+    out["trend_bottom"] = trend["bottom"]
     out["prev"] = {k: prev[k] for k in _SUMMARY_KEYS}
     out["lifetime"] = {k: life[k] for k in _SUMMARY_KEYS}
     out["delta"] = {k: _ratio(cur[k], prev[k]) for k in _SUMMARY_KEYS}

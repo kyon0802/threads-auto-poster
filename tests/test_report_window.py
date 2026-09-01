@@ -205,6 +205,27 @@ def test_html_backward_compatible_without_new_args():
     print("  ✓ 旧形式の analysis でも後方互換で描画 OK")
 
 
+def test_bottom_and_trend_rankings():
+    """負けワースト3（views昇順）と、28日窓の trend_top/trend_bottom が出る。"""
+    from threads_poster.analyzer import analyze_insights
+    def row(pid, dt, views):
+        return {"posted_id": pid, "snapshot_date": "2026-09-01",
+                "post_datetime": dt, "views": views, "likes": 1,
+                "replies": 0, "reposts": 0, "quotes": 0,
+                "engagement_rate": 0.1, "text_len": 100}
+    rows = [row("p1", "2026-08-30 12:00", 1000),   # 直近7日内・勝ち
+            row("p2", "2026-08-29 12:00", 5),      # 直近7日内・負け
+            row("p3", "2026-08-10 12:00", 800),    # 7日外・28日内
+            row("p4", "2026-08-11 12:00", 2)]      # 7日外・28日内・負け
+    a = analyze_insights(rows)
+    assert [e["posted_id"] for e in a["bottom"]][:2] == ["p4", "p2"], a["bottom"]
+    w = analyze_windowed(rows, now=datetime(2026, 9, 1, 6, 0))
+    # trend_* は28日窓＝4本全部が対象。top先頭=p1(1000)、bottom先頭=p4(2)
+    assert w["trend_top"][0]["posted_id"] == "p1", w["trend_top"]
+    assert w["trend_bottom"][0]["posted_id"] == "p4", w["trend_bottom"]
+    print("  ✓ 負けワースト3と28日窓の勝ち/負けランキング OK")
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
