@@ -107,7 +107,7 @@ def enrich_tops_with_text(posts: list, account: str, analysis: dict) -> None:
         pid = str(p.get("posted_id") or "")
         if pid:
             pid2text[pid] = p.get("text") or ""
-    for key in ("top", "top_er"):
+    for key in ("top", "top_er", "trend_top", "trend_bottom"):
         for r in analysis.get(key, []):
             r["text"] = pid2text.get(str(r.get("posted_id") or ""), "")
 
@@ -209,6 +209,9 @@ def main() -> int:
         for acc in accounts:
             try:
                 analysis = Analyzer(store, now_fn=lambda: now_local).run(acc)
+                # ランキングに本文を結合（★生成より前・全事業で実施。勝ち/負けの実物を
+                # 生成プロンプトへ届かせる＝PDCA閉ループの結線・2026-09-01設計）
+                enrich_tops_with_text(posts_all, acc, analysis)
                 totals["analyzed"] += 1
                 Reporter(store).run(acc, analysis, gen_date)
                 totals["reported"] += 1
@@ -253,7 +256,6 @@ def main() -> int:
                 # ── レポート成果物（本文結合・方針生成・HTML）はメール対象の事業だけ ──
                 # （対象外の事業は分析・レポートタブ更新・投稿生成のみ＝無駄なAI課金/レンダリングを避ける）。
                 if in_email:
-                    enrich_tops_with_text(posts_all, acc, analysis)  # TOP5に実際の本文を結合
                     followers = follower_trend(read_account_metrics(store, acc), now=now_local)
                     runway = compute_runway(posts_all, acc, now=now_local,
                                             posts_per_day=POSTS_PER_DAY)

@@ -252,3 +252,15 @@ def test_biz_label_covers_all_live_businesses():
     missing = [b for b in SCHEDULE_FN_BY_BUSINESS if b not in BIZ_LABEL]
     assert not missing, f"メール件名ラベル未登録の事業: {missing}"
     print("  ✓ 全事業にメール件名の日本語ラベルがある OK")
+
+
+def test_enrich_covers_trend_keys():
+    """trend_top / trend_bottom にも本文が結合される（生成プロンプト注入の材料）。"""
+    from main_weekly import enrich_tops_with_text
+    posts = [{"account": "a1", "posted_id": "p1", "text": "勝ち本文"},
+             {"account": "a1", "posted_id": "p9", "text": "負け本文"}]
+    analysis = {"top": [{"posted_id": "p1"}], "top_er": [],
+                "trend_top": [{"posted_id": "p1"}], "trend_bottom": [{"posted_id": "p9"}]}
+    enrich_tops_with_text(posts, "a1", analysis)
+    assert analysis["trend_top"][0]["text"] == "勝ち本文"
+    assert analysis["trend_bottom"][0]["text"] == "負け本文"
