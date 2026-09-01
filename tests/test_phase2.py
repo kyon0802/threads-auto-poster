@@ -418,10 +418,32 @@ def test_generator_writes_type_labels():
     print("  ✓ generator が型ラベル（フック型/内容型/参照お手本ID）を投稿行に書く OK")
 
 
+def test_generator_blanks_unknown_exemplar_id_on_auto_generate():
+    """candidates=None（自動生成）時のみ exemplar_id を既知IDと照合し、未知IDは空文字に落とす。
+    手動注入（candidates指定）時は従来どおり無検証（test_generator_writes_type_labels）。"""
+    store = MemoryStore([{"account": "a1"}], [])
+    store.profiles = {"a1": {"声": "テスト"}}
+    store.guideline = [{"分類": "NGワード", "ルール": "絶対", "重大度": "高"}]
+    store.exemplars = {"a1": [{"exemplar_id": "ex-001", "text": "お手本", "status": "active"}]}
+    fake_out = [
+        {"text": "既知IDを申告する投稿。", "hook_type": "数字提示",
+         "content_type": "情報提供", "exemplar_id": "ex-001"},
+        {"text": "存在しないIDをでっち上げる投稿。", "hook_type": "心の声",
+         "content_type": "共感", "exemplar_id": "ex-999"},
+    ]
+    Generator(store, "a1", generate_fn=lambda p: fake_out, now_fn=lambda: NOW,
+             status="draft").run({})
+    by_text = {p["text"]: p for p in store.posts}
+    assert by_text["既知IDを申告する投稿。"]["exemplar_ref"] == "ex-001"
+    assert by_text["存在しないIDをでっち上げる投稿。"]["exemplar_ref"] == ""
+    print("  ✓ 自動生成時のみ exemplar_id を既知IDと照合し未知IDを空にする OK")
+
+
 def test_build_prompt_injects_examples_and_types():
     """勝ち/負け本文・お手本・型指示・探索枠がプロンプトに入る。retired お手本は除外。"""
     from threads_poster.generator import build_prompt
     analysis = {
+        "trend_n_posts": 10,
         "trend_top": [{"posted_id": "p1", "views": 1200, "text": "勝った本文サンプル"}],
         "trend_bottom": [{"posted_id": "p9", "views": 3, "text": "滑った本文サンプル"}],
     }
@@ -440,6 +462,22 @@ def test_build_prompt_injects_examples_and_types():
     assert "数字提示" in p and "探索枠" in p   # 型語彙と探索枠の指示
     assert "exemplar_id" in p                  # 模倣元の自己申告指示
     print("  ✓ build_prompt が勝ち/負け本文・お手本DB・型指示・探索枠を注入する OK")
+
+
+def test_build_prompt_dedupes_top_bottom_and_suppresses_thin_sample():
+    """28日窓に4本しか無いとき（trend_n_posts<8）は負けセクションが出ず、
+    trend_top/trend_bottom に同一 posted_id が重複していても本文が2回現れない。"""
+    from threads_poster.generator import build_prompt
+    analysis = {
+        "trend_n_posts": 4,
+        "trend_top": [{"posted_id": "p1", "views": 1200, "text": "唯一の投稿本文"}],
+        "trend_bottom": [{"posted_id": "p1", "views": 1200, "text": "唯一の投稿本文"}],
+    }
+    p = build_prompt("a1", {"声": "テスト"}, [{"分類": "NG", "ルール": "絶対", "重大度": "高"}],
+                     analysis, 4)
+    assert p.count("唯一の投稿本文") == 1, p   # 勝ちにも負けにも重複して出ない
+    assert "◆負け" not in p                    # サンプルが薄いので負けセクション自体が無い
+    print("  ✓ build_prompt が勝ち/負けの重複を排除し薄いサンプルで負けを抑制する OK")
 
 
 if __name__ == "__main__":
@@ -470,5 +508,7 @@ if __name__ == "__main__":
     test_posts_aliases_have_label_columns()
     test_memorystore_get_exemplars_default_and_set()
     test_generator_writes_type_labels()
+    test_generator_blanks_unknown_exemplar_id_on_auto_generate()
     test_build_prompt_injects_examples_and_types()
+    test_build_prompt_dedupes_top_bottom_and_suppresses_thin_sample()
     print("========== 全テスト PASS ==========")

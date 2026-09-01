@@ -254,6 +254,21 @@ def test_biz_label_covers_all_live_businesses():
     print("  ✓ 全事業にメール件名の日本語ラベルがある OK")
 
 
+def test_trend_bottom_excludes_unaged_posts():
+    """公開後48時間未満の投稿は views が未熟成のため trend_bottom（負け例）に入れない
+    （新作＝低views→負け判定→次サイクルも避けられる、の自己強化ループを断つ）。"""
+    rows = [
+        ins("recent_low", "2026-07-28 01:00", 2),   # NOWの12時間前・views小 → 除外
+        ins("old_low", "2026-07-25 13:00", 3),      # NOWの3日前・views小 → 対象
+        ins("filler", "2026-07-20 13:00", 500),     # 28日窓内の埋め合わせ
+    ]
+    w = analyze_windowed(rows, now=NOW)
+    bottom_ids = [e["posted_id"] for e in w["trend_bottom"]]
+    assert "recent_low" not in bottom_ids, bottom_ids
+    assert "old_low" in bottom_ids, bottom_ids
+    print("  ✓ trend_bottom は公開後48時間未満の投稿を除外する OK")
+
+
 def test_enrich_covers_trend_keys():
     """trend_top / trend_bottom にも本文が結合される（生成プロンプト注入の材料）。"""
     from main_weekly import enrich_tops_with_text

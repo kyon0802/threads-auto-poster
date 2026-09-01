@@ -60,13 +60,16 @@ def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: d
 
     # ── 実績の実物（勝ち/負けの対比・PDCA閉ループの中核）────────────────────
     def _fmt(entries, label):
-        lines = []
-        for e in (entries or [])[:3]:
-            text = str(e.get("text") or "").strip()
-            if text:
-                lines.append(f"◆{label}（表示{e.get('views', 0)}回）\n{text}")
-        return lines
-    real = _fmt(analysis.get("trend_top"), "勝ち") + _fmt(analysis.get("trend_bottom"), "負け")
+        return [f"◆{label}（表示{e.get('views', 0)}回）\n{str(e.get('text') or '').strip()}"
+                for e in entries]
+    tops = [e for e in (analysis.get("trend_top") or []) if str(e.get("text") or "").strip()][:3]
+    seen = {str(e.get("posted_id")) for e in tops}
+    bottoms = [e for e in (analysis.get("trend_bottom") or [])
+               if str(e.get("text") or "").strip() and str(e.get("posted_id")) not in seen][:3]
+    # サンプルが薄いうちは「負け」を出さない（順位に意味が無いため）
+    if analysis.get("trend_n_posts", 0) < 8:
+        bottoms = []
+    real = _fmt(tops, "勝ち") + _fmt(bottoms, "負け")
     real_section = ("## 実績の実物（直近28日・勝ちと負けの差から学ぶ。負けの真似は禁止）\n"
                     + "\n\n".join(real) + "\n\n") if real else ""
 
@@ -163,13 +166,22 @@ class Generator:
                 f"（knowledge={len(knowledge)}字 / profile={len(profile)}項目 / guideline={len(guideline)}行）")
         ng = extract_ng_words(guideline)
 
+        known_exemplar_ids = None
         if candidates is None:
             exemplars = self.store.get_exemplars(self.account)
+            known_exemplar_ids = {str(ex.get("exemplar_id")) for ex in exemplars}
             prompt = build_prompt(self.account, profile, guideline, analysis, self.n_posts,
                                   knowledge=knowledge, exemplars=exemplars)
             candidates = self.generate_fn(prompt)
 
         candidates = _normalize_candidates(candidates)
+        # exemplar_id の自己申告は無検証だとシートに嘘のIDが残る。自動生成時（exemplars を
+        # 読んでいる場合）のみ、既知IDの集合と照合し未知IDは空文字に落とす。
+        # candidates 手動注入時（テスト等）は exemplars を読んでいないので照合しない＝従来挙動。
+        if known_exemplar_ids is not None:
+            for c in candidates:
+                if c["exemplar_id"] and c["exemplar_id"] not in known_exemplar_ids:
+                    c["exemplar_id"] = ""
         # 想定本数より少なければ警告（max_tokens切れ等での静かな少数生成を可視化する）。
         # 正規化の後（空text除去後の実質本数）で警告する。
         if len(candidates) < self.n_posts:
@@ -226,7 +238,8 @@ def make_anthropic_generate_fn(model: str = DEFAULT_MODEL, n: int = 5):
         resp = client.messages.create(
             model=model,
             max_tokens=max_tokens,
-            system="日本語で、指定のプロフィールとガイドラインに完全準拠した投稿本文のみを生成する。",
+            system="日本語で、指定のプロフィールとガイドラインに完全準拠した投稿本文と、"
+                   "その型ラベル（hook_type/content_type/exemplar_id）を生成する。",
             messages=[{"role": "user", "content": prompt}],
             output_config={"format": {"type": "json_schema", "schema": {
                 "type": "object",

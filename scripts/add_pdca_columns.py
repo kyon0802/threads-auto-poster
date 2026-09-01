@@ -53,6 +53,11 @@ def migrate(sheet_id: str, apply: bool) -> None:
         else:
             print(f"  投稿_{acc}: 追加 {missing}" + ("" if apply else "（DRY-RUN）"))
             if apply:
+                # 既存タブはグリッド幅=列数ちょうどで作られていることが多く、右端追記が
+                # exceeds grid limits で落ちる。先に必要幅までグリッドを拡張する。
+                need = len(header) + len(missing)
+                if ws.col_count < need:
+                    with_retry(lambda: ws.add_cols(need - ws.col_count))
                 # 見出し行の右端に不足列だけ追記（既存列は動かさない＝データ非破壊）
                 with_retry(lambda: ws.update(
                     [[*missing]],

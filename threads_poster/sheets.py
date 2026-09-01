@@ -487,6 +487,11 @@ class GoogleSheetStore(Store):
         for internal, v in fields.items():
             if internal in to_header and to_header[internal] in col_index:
                 row[col_index[to_header[internal]] - 1] = "" if v is None else str(v)
+            else:
+                # 内部キーはあるがシート見出しに列が無い＝タブ移行忘れ（例: add_pdca_columns.py
+                # 未実行）。書込動作は変えず、静かに欠落させず警告だけ出す。
+                log.warning("投稿_%s: 見出しに無い列 '%s' への書込をスキップしました"
+                           "（scripts/add_pdca_columns.py の未実行が疑われます）", account, internal)
         with_retry(lambda: ws.append_row(row, value_input_option="RAW"))
 
     def sort_posts_tab(self, account: str, descending: bool = True) -> None:

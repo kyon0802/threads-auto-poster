@@ -136,7 +136,7 @@ scripts/                      ローカルで人が実行するセットアッ�
   sync_knowledge.py           ローカルナレッジ→ナレッジ_タブ同期
   add_pdca_columns.py         PDCA移行: 投稿タブ3列追加＋お手本DB/仮説ログ作成（冪等・DRY-RUN既定）
   local_run.sh                .env読込→DRY_RUN既定でローカル実行
-tests/                        テスト（API不要・モック・79本）。pytest でも直実行でも可
+tests/                        テスト（API不要・モック・97本）。pytest でも直実行でも可
   test_logic.py / test_collect.py / test_phase2.py / test_schedule.py
   test_report_window.py（期間窓・在庫・エラー分類） / test_monitor.py / test_threads_api_masking.py
 sheet_templates/              accounts.csv / posts.csv / posts_example.csv（記入例）

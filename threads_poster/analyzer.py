@@ -199,7 +199,12 @@ def analyze_windowed(rows: list[dict], *, now: datetime,
     out["trend_n_posts"] = trend["n_posts"]
     # 生成プロンプト注入用の勝ち/負け実物（28日窓。7日窓では12本しかなくサンプル不足のため）
     out["trend_top"] = trend["top"]
-    out["trend_bottom"] = trend["bottom"]
+    # 公開後48時間未満の投稿は views がまだ熟成していない（新作＝低views→「負け」判定→
+    # 次サイクルでも避けられる、という自己強化ループを断つ）。parse できない日時は
+    # 従来どおり除外しない（判定不能を「新しい」扱いにしない）。
+    trend_bottom_pool = [r for r in trend.get("bottom", [])
+                         if (lambda dt: dt is None or now - dt >= timedelta(hours=48))(_parse_dt(r.get("post_datetime")))]
+    out["trend_bottom"] = trend_bottom_pool
     out["prev"] = {k: prev[k] for k in _SUMMARY_KEYS}
     out["lifetime"] = {k: life[k] for k in _SUMMARY_KEYS}
     out["delta"] = {k: _ratio(cur[k], prev[k]) for k in _SUMMARY_KEYS}
