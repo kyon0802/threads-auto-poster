@@ -399,6 +399,25 @@ def test_memorystore_get_exemplars_default_and_set():
     print("  ✓ MemoryStore.get_exemplars（デフォルト空・セット/取得）OK")
 
 
+def test_generator_writes_type_labels():
+    """dict候補の型ラベルが投稿行に書かれる。文字列候補（旧形式）は空ラベルで通る。"""
+    store = MemoryStore([{"account": "a1"}], [])
+    store.profiles = {"a1": {"声": "テスト"}}
+    store.guideline = [{"分類": "NGワード", "ルール": "絶対", "重大度": "高"}]
+    cands = [
+        {"text": "月収の手取りを公開する。", "hook_type": "数字提示",
+         "content_type": "情報提供", "exemplar_id": "ex-001"},
+        "旧形式の文字列候補もそのまま通る。",
+    ]
+    Generator(store, "a1", generate_fn=lambda p: cands, now_fn=lambda: NOW,
+              status="draft").run({}, candidates=cands)
+    assert len(store.posts) == 2, store.posts
+    assert store.posts[0]["hook_type"] == "数字提示"
+    assert store.posts[0]["exemplar_ref"] == "ex-001"
+    assert store.posts[1]["hook_type"] == ""   # 旧形式＝空ラベル（後方互換）
+    print("  ✓ generator が型ラベル（フック型/内容型/参照お手本ID）を投稿行に書く OK")
+
+
 if __name__ == "__main__":
     print("=== Phase 2 テスト ===")
     test_analyze()
@@ -426,4 +445,5 @@ if __name__ == "__main__":
     test_build_prompt_includes_guideline()
     test_posts_aliases_have_label_columns()
     test_memorystore_get_exemplars_default_and_set()
+    test_generator_writes_type_labels()
     print("========== 全テスト PASS ==========")

@@ -26,6 +26,22 @@ class GeneratorError(Exception):
     pass
 
 
+def _normalize_candidates(candidates: list) -> list[dict]:
+    """生成結果を {text, hook_type, content_type, exemplar_id} に正規化する。
+    旧形式（文字列のリスト）も受ける（後方互換：既存テスト・手動注入を壊さない）。"""
+    out = []
+    for c in candidates:
+        if isinstance(c, str):
+            c = {"text": c}
+        out.append({
+            "text": str(c.get("text") or ""),
+            "hook_type": str(c.get("hook_type") or ""),
+            "content_type": str(c.get("content_type") or ""),
+            "exemplar_id": str(c.get("exemplar_id") or ""),
+        })
+    return [c for c in out if c["text"].strip()]
+
+
 def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: dict, n: int,
                  knowledge: str = "") -> str:
     guide = "\n".join(f"- [{g.get('重大度')}] {g.get('分類')}: {g.get('ルール')}" for g in guideline)
@@ -108,17 +124,20 @@ class Generator:
         if candidates is None:
             prompt = build_prompt(self.account, profile, guideline, analysis, self.n_posts, knowledge=knowledge)
             candidates = self.generate_fn(prompt)
-            # 想定本数より少なければ警告（max_tokens切れ等での静かな少数生成を可視化する）。
-            if len(candidates) < self.n_posts:
-                logger.warning("%s: 生成本数が想定を下回りました（要求%d / 取得%d）",
-                               self.account, self.n_posts, len(candidates))
+
+        candidates = _normalize_candidates(candidates)
+        # 想定本数より少なければ警告（max_tokens切れ等での静かな少数生成を可視化する）。
+        # 正規化の後（空text除去後の実質本数）で警告する。
+        if len(candidates) < self.n_posts:
+            logger.warning("%s: 生成本数が想定を下回りました（要求%d / 取得%d）",
+                           self.account, self.n_posts, len(candidates))
 
         now = self.now_fn()
         date = now.strftime("%Y%m%d")
         kept, rejected = [], []
-        for text in candidates:
-            ok, reasons = check_post(text, ng)
-            (kept if ok else rejected).append(text if ok else {"text": text, "reasons": reasons})
+        for c in candidates:
+            ok, reasons = check_post(c["text"], ng)
+            (kept.append(c) if ok else rejected.append({"text": c["text"], "reasons": reasons}))
 
         # 予約時刻の割り当て。schedule_fn があればそれ（製造業＝1日4本・ランダム）、
         # 無ければ従来どおり「翌日から1日1本・suggest_hour固定」。
@@ -133,14 +152,17 @@ class Generator:
             ]
 
         written = []
-        for j, (text, post_dt) in enumerate(zip(kept, schedule), 1):
+        for j, (c, post_dt) in enumerate(zip(kept, schedule), 1):
             row_id = f"{self.id_prefix}-g{date}-{j:02d}"
             self.store.add_post(self.account, {
                 "row_id": row_id,
                 "post_datetime": post_dt,
-                "text": text,
+                "text": c["text"],
                 "media_type": "TEXT",
                 "status": self.status,  # draft = 自動公開されない（人が queued に変える）
+                "hook_type": c["hook_type"],
+                "content_type": c["content_type"],
+                "exemplar_ref": c["exemplar_id"],
             })
             written.append(row_id)
         logger.info("%s 生成完了: 候補%d / 合格%d / 破棄%d", self.account, len(candidates), len(kept), len(rejected))
@@ -150,12 +172,13 @@ class Generator:
 def make_anthropic_generate_fn(model: str = DEFAULT_MODEL, n: int = 5):
     """本番の生成関数（Anthropic 公式SDK）。ANTHROPIC_API_KEY を環境から読む。
     構造化出力で投稿配列を受け取り、そのまま返す。"""
-    def fn(prompt: str) -> list[str]:
+    def fn(prompt: str) -> list[dict]:
         import anthropic
         client = anthropic.Anthropic()
-        # 本数に比例して出力上限を確保。1投稿は基本150字前後・最大250字（THREADS_HOOK_RULES）だが、
-        # 28本でも切れないよう保守的に 1本=800token 見込みで確保（28本→22,400）。
-        max_tokens = min(60000, max(8000, 800 * n))
+        # 本数に比例して出力上限を確保。1投稿は基本150字前後・最大250字（THREADS_HOOK_RULES）に
+        # 型ラベル（hook_type/content_type/exemplar_id）分を加味し、28本でも切れないよう
+        # 保守的に 1本=900token 見込みで確保（28本→25,200）。
+        max_tokens = min(60000, max(8000, 900 * n))
         resp = client.messages.create(
             model=model,
             max_tokens=max_tokens,
@@ -163,7 +186,17 @@ def make_anthropic_generate_fn(model: str = DEFAULT_MODEL, n: int = 5):
             messages=[{"role": "user", "content": prompt}],
             output_config={"format": {"type": "json_schema", "schema": {
                 "type": "object",
-                "properties": {"posts": {"type": "array", "items": {"type": "string"}}},
+                "properties": {"posts": {"type": "array", "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "hook_type": {"type": "string"},
+                        "content_type": {"type": "string"},
+                        "exemplar_id": {"type": "string"},  # 模倣元お手本ID・無ければ ""
+                    },
+                    "required": ["text", "hook_type", "content_type", "exemplar_id"],
+                    "additionalProperties": False,
+                }}},
                 "required": ["posts"],
                 "additionalProperties": False,
             }}},
