@@ -74,7 +74,7 @@ GitHub Actions（すべて別systemの6本）
 - **生成**: `GENERATE_POSTS=1`＋`ANTHROPIC_API_KEY`。`GEN_STATUS`=draft(人が確認)/queued(全自動公開)。**事業別に `GEN_STATUS_<NAME>` で上書き可**（製造業だけdraft等）。生成前に必須タブゲート（§17e）、生成後に機械コンプラゲート。**2026-08-31に seizogyo2/seizogyo3/meguri の `GEN_POSTS_*` を 12 にして全4アカ自動生成ON**（それまでは立ち上げ期の手動運用のため 0＝オフだった）。
 - **メール**: `ENABLE_EMAIL=1` でアカウントごとに週次レポートを個別送信（宛先は Variable `MAIL_TO` / `MAIL_TO_<事業名>`・認証は Gmail アプリパスワード。実アドレスは公開repoに書かない＝§17b）。run失敗時はGitHub純正の失敗通知メールも飛ぶ。
 - **在庫監視**: `monitor.yml`（日次 08:00 JST・読取専用）が各アカの未来在庫と残り日数を算出し、在庫ゼロ/残りわずかのときだけ【要確認】メールを送る。在庫ゼロの間は run を exit 2 で赤くする。**投稿ジョブは在庫ゼロでも成功で終わるため、停止を検知できる唯一の仕組み**（§10・docs/CHANGELOG.md §27）。
-- **テスト**: `python3 -m pytest tests/ -q`（87本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。
+- **テスト**: `python3 -m pytest tests/ -q`（97本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。
 - **過去インシデントの教訓は §10 と docs/CHANGELOG.md（§13/§14/§16/§27）**。特に「row_id 必須・全タブ一意」は絶対。
 
 ---
