@@ -17,7 +17,9 @@ from .sheets import Store
 logger = logging.getLogger("collector")
 
 # エンゲージ率の分子（表示回数で割る）。views は分母なので含めない。
-ENGAGE_METRICS = ("likes", "replies", "reposts", "quotes")
+# shares（保存/共有）は 2026-09-01 のPDCA設計で追加：勝敗指標は views だが、
+# 「保存される投稿」仮説の検証にERへ算入する。過去スナップショットは再計算しない。
+ENGAGE_METRICS = ("likes", "replies", "reposts", "quotes", "shares")
 
 
 def _parse_api_ts(ts, tz: ZoneInfo):

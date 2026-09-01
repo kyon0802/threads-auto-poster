@@ -134,6 +134,19 @@ def test_missing_views_blank_engagement():
     print("  ✓ views 欠落時はエンゲージ率を空に OK")
 
 
+def test_shares_counted_in_engagement():
+    """保存/共有(shares)もERの分子に入る（PDCA設計 2026-09-01・保存される投稿を勝ち筋として測るため）。"""
+    media = [{"id": "m1", "permalink": "http://x/1", "timestamp": "2026-06-20T10:00:00+0000",
+              "media_type": "TEXT", "text": "hello"}]
+    insights = {"m1": {"views": 100, "likes": 5, "replies": 3, "reposts": 1, "quotes": 1, "shares": 2}}
+    store = MemoryStore(acc(), [])
+    Collector(store, client_factory=factory_for(media, insights, {"followers_count": 50}),
+              now_fn=lambda: NOW).run()
+    # (5+3+1+1+2)/100 = 0.12（shares が入らなければ 0.10 になり失敗する）
+    assert store.insights[0]["engagement_rate"] == round(12 / 100, 4), store.insights[0]
+    print("  ✓ shares がエンゲージ率に含まれる OK")
+
+
 if __name__ == "__main__":
     print("=== Collector テスト ===")
     test_basic_and_engagement()
@@ -143,4 +156,5 @@ if __name__ == "__main__":
     test_one_media_error_does_not_stop()
     test_join_row_id_and_tree()
     test_missing_views_blank_engagement()
+    test_shares_counted_in_engagement()
     print("========== 全テスト PASS ==========")
