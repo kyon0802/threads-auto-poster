@@ -236,8 +236,11 @@ def main() -> int:
                         schedule_fn = SCHEDULE_FN_BY_BUSINESS.get(name)
                         acc_status = gen_status_for(name, os.environ, gen_status)
                         try:
+                            # existing_posts=事業で読み済みの投稿一覧（追加読み取りなし）。
+                            # 既存在庫の最終日の翌日から予約し、FORCE_CYCLE 時の日程重複を防ぐ。
                             res = Generator(store, acc, n_posts=acc_n_posts, model=gen_model,
-                                            status=acc_status, schedule_fn=schedule_fn).run(analysis)
+                                            status=acc_status, schedule_fn=schedule_fn
+                                            ).run(analysis, existing_posts=posts_all)
                             totals["generated_drafts"] += len(res["written"])
                             gen_info = {"ok": True, "written": len(res["written"]),
                                         "status": f"{acc_status}で投入（破棄{len(res['rejected'])}本）"}

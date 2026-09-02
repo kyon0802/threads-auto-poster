@@ -10,9 +10,11 @@
 """
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import random
+import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -43,7 +45,9 @@ def _normalize_candidates(candidates: list) -> list[dict]:
 
 
 def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: dict, n: int,
-                 knowledge: str = "", exemplars: list[dict] | None = None) -> str:
+                 knowledge: str = "", exemplars: list[dict] | None = None,
+                 hook_types: list[str] | None = None) -> str:
+    hook_types = list(hook_types) if hook_types else hook_types_for(profile)
     guide = "\n".join(f"- [{g.get('重大度')}] {g.get('分類')}: {g.get('ルール')}" for g in guideline)
     wins = []
     for axis, key in [("時間帯", "by_time"), ("本文長", "by_length"), ("ツリー有無", "by_tree")]:
@@ -89,9 +93,9 @@ def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: d
 
     type_section = (
         "## 型ラベルと探索枠（全投稿に必ず自己申告）\n"
-        f"- フック型: {' / '.join(HOOK_TYPES)}（探索枠では新しい型を短い名前で自由命名可）\n"
+        f"- フック型: {' / '.join(hook_types)}（**必ずこの中から1つ選ぶ**。新しい名前を作らない）\n"
         f"- 内容型: {' / '.join(CONTENT_TYPES)}\n"
-        f"- {n}本のうち2〜3本は**探索枠**＝上の実績に無い新しいフック・切り口を意図的に試す\n"
+        f"- {n}本のうち2〜3本は**探索枠**＝上の実績で使われていない／少ないフック型を意図的に試す\n"
         "- 各投稿の出力は text / hook_type / content_type / exemplar_id（模倣元。無ければ空文字）\n"
     )
 
@@ -114,9 +118,30 @@ def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: d
     )
 
 
-# 型ラベルの語彙（生成の自己申告と第2段の配分計算が共有する。新型は探索枠で自由命名可）
+# 型ラベルの語彙（生成の自己申告と第2段の配分計算が共有する）。
+# ★2026-09-03: アカウント別に上書き可。占い「澪」はナレッジに占い専用の6型を持ち、汎用6型を
+# 押し付けると AI がナレッジ側の名前で自由命名して集計が分裂した（12本中6本が独自名）。
+# `プロフィール_<acc>` の項目「フック型語彙」に " / " 区切りで書けばそれを正とし、
+# JSONスキーマの enum で強制する（自由命名は不可。探索枠＝サンプルの少ない型を試す）。
 HOOK_TYPES = ["数字提示", "心の声", "逆張り", "失敗談", "問いかけ", "場面描写"]
 CONTENT_TYPES = ["情報提供", "共感", "暴露", "求人紹介"]
+PROFILE_HOOK_VOCAB_KEY = "フック型語彙"
+# 区切りは「 / 」（前後に空白）・「、」・「,」のみ。名前内部の全角スラッシュ（例: 防御線／逆説）は
+# 区切りにしない（澪の型名に含まれるため）。
+_VOCAB_SEP = re.compile(r"\s*[,、]\s*|\s+/\s+")
+
+
+def hook_types_for(profile: dict) -> list[str]:
+    """アカウントのフック型語彙。プロフィールに「フック型語彙」があればそれ、無ければ汎用 HOOK_TYPES。"""
+    raw = str((profile or {}).get(PROFILE_HOOK_VOCAB_KEY) or "").strip()
+    if not raw:
+        return list(HOOK_TYPES)
+    out = []
+    for t in _VOCAB_SEP.split(raw):
+        t = t.strip()
+        if t and t not in out:
+            out.append(t)
+    return out or list(HOOK_TYPES)
 
 
 # Threads の表示回数を左右する最重要原則（運営者の実運用知見・全事業共通）。
@@ -135,6 +160,44 @@ THREADS_HOOK_RULES = (
 )
 
 
+_STOCK_STATUSES = ("", "queued", "draft", "publishing")
+
+
+def _stock_anchor(existing_posts, account: str, now):
+    """このアカウントの未来在庫（未公開・未退避）の最終日時を返す。無ければ now。
+    返り値は now と同じ tz の aware datetime（schedule 側が aware 前提のため）。"""
+    best = None
+    for p in existing_posts or []:
+        if str(p.get("account") or "") != str(account):
+            continue
+        if str(p.get("status") or "").strip() not in _STOCK_STATUSES:
+            continue
+        raw = str(p.get("post_datetime") or "").strip().replace("/", "-")
+        dt = None
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+            try:
+                dt = datetime.strptime(raw, fmt).replace(tzinfo=now.tzinfo)
+                break
+            except ValueError:
+                continue
+        if dt is None or dt <= now:
+            continue
+        if best is None or dt > best:
+            best = dt
+    return best or now
+
+
+def _call_generate_fn(fn, prompt: str, hook_types: list[str]):
+    """generate_fn(prompt) の旧シグネチャと generate_fn(prompt, hook_types=...) の両方を受ける。"""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return fn(prompt)
+    if "hook_types" in params or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return fn(prompt, hook_types=hook_types)
+    return fn(prompt)
+
+
 class Generator:
     def __init__(self, store, account: str, generate_fn=None, now_fn=None,
                  n_posts: int = 5, status: str = "draft", id_prefix: str | None = None,
@@ -142,7 +205,9 @@ class Generator:
                  schedule_fn=None, rng=None):
         self.store = store
         self.account = account
-        self.generate_fn = generate_fn or make_anthropic_generate_fn(model, n_posts)
+        # 生成関数は run() 時にアカウントの語彙を enum に焼いて構築する（注入時はそのまま使う）
+        self.generate_fn = generate_fn
+        self.model = model
         self.tz = ZoneInfo(tz_name)
         self.now_fn = now_fn or (lambda: datetime.now(self.tz))
         self.n_posts = n_posts
@@ -154,7 +219,8 @@ class Generator:
         self.schedule_fn = schedule_fn
         self.rng = rng or random.Random()
 
-    def run(self, analysis: dict, candidates: list[str] | None = None) -> dict:
+    def run(self, analysis: dict, candidates: list | None = None,
+            existing_posts: list[dict] | None = None) -> dict:
         profile = self.store.get_profile(self.account)
         guideline = self.store.get_guideline()
         knowledge = self.store.get_knowledge(self.account)
@@ -170,9 +236,12 @@ class Generator:
         if candidates is None:
             exemplars = self.store.get_exemplars(self.account)
             known_exemplar_ids = {str(ex.get("exemplar_id")) for ex in exemplars}
+            hook_types = hook_types_for(profile)
             prompt = build_prompt(self.account, profile, guideline, analysis, self.n_posts,
-                                  knowledge=knowledge, exemplars=exemplars)
-            candidates = self.generate_fn(prompt)
+                                  knowledge=knowledge, exemplars=exemplars, hook_types=hook_types)
+            gen = self.generate_fn or make_anthropic_generate_fn(self.model, self.n_posts,
+                                                                 hook_types=hook_types)
+            candidates = _call_generate_fn(gen, prompt, hook_types)
 
         candidates = _normalize_candidates(candidates)
         # exemplar_id の自己申告は無検証だとシートに嘘のIDが残る。自動生成時（exemplars を
@@ -190,6 +259,10 @@ class Generator:
 
         now = self.now_fn()
         date = now.strftime("%Y%m%d")
+        # ★在庫アンカー（2026-09-03）：既存の未来在庫があればその最終日を起点にし、翌日から予約する。
+        # 以前は常に「今日の翌日」から始めたため、FORCE_CYCLE で臨時実行すると次サイクルと
+        # 日程が重複した（09-03 が各アカ8本＝16行を手で退避）。
+        anchor = _stock_anchor(existing_posts, self.account, now)
         kept, rejected = [], []
         for c in candidates:
             ok, reasons = check_post(c["text"], ng)
@@ -198,10 +271,10 @@ class Generator:
         # 予約時刻の割り当て。schedule_fn があればそれ（製造業＝1日4本・ランダム）、
         # 無ければ従来どおり「翌日から1日1本・suggest_hour固定」。
         if self.schedule_fn is not None:
-            schedule = self.schedule_fn(len(kept), start_date=now, tz=self.tz, rng=self.rng)
+            schedule = self.schedule_fn(len(kept), start_date=anchor, tz=self.tz, rng=self.rng)
         else:
             schedule = [
-                (now + timedelta(days=j)).replace(
+                (anchor + timedelta(days=j)).replace(
                     hour=self.suggest_hour, minute=0, second=0, microsecond=0
                 ).strftime("%Y-%m-%d %H:%M")
                 for j in range(1, len(kept) + 1)
@@ -225,11 +298,14 @@ class Generator:
         return {"kept": kept, "rejected": rejected, "written": written}
 
 
-def make_anthropic_generate_fn(model: str = DEFAULT_MODEL, n: int = 5):
+def make_anthropic_generate_fn(model: str = DEFAULT_MODEL, n: int = 5,
+                               hook_types: list[str] | None = None):
     """本番の生成関数（Anthropic 公式SDK）。ANTHROPIC_API_KEY を環境から読む。
     構造化出力で投稿配列を受け取り、そのまま返す。"""
-    def fn(prompt: str) -> list[dict]:
+    def fn(prompt: str, hook_types: list[str] | None = hook_types) -> list[dict]:
         import anthropic
+        # フック型はアカウントの語彙に enum で固定（自由命名で集計が分裂するのを機械的に防ぐ）
+        hook_schema = {"type": "string", "enum": list(hook_types)} if hook_types else {"type": "string"}
         client = anthropic.Anthropic()
         # 本数に比例して出力上限を確保。1投稿は基本150字前後・最大250字（THREADS_HOOK_RULES）に
         # 型ラベル（hook_type/content_type/exemplar_id）分を加味し、28本でも切れないよう
@@ -247,7 +323,7 @@ def make_anthropic_generate_fn(model: str = DEFAULT_MODEL, n: int = 5):
                     "type": "object",
                     "properties": {
                         "text": {"type": "string"},
-                        "hook_type": {"type": "string"},
+                        "hook_type": hook_schema,
                         "content_type": {"type": "string"},
                         "exemplar_id": {"type": "string"},  # 模倣元お手本ID・無ければ ""
                     },

@@ -41,10 +41,12 @@ def _is_transient(exc) -> bool:
     return isinstance(exc, (ReqConnectionError, Timeout))
 
 
-def with_retry(fn, *, attempts: int = 5, base_delay: float = 2.0, sleep=None, on_retry=None):
+def with_retry(fn, *, attempts: int = 6, base_delay: float = 2.0, sleep=None, on_retry=None):
     """fn() を実行し、一過性のサーバエラーなら指数バックオフで再試行する。
     - 一過性でない例外はそのまま即送出（再試行しない）。
     - attempts 回試して最後も一過性エラーなら、その例外を送出する。
+    - 既定 6 回（2,4,8,16,32 秒＝合計62秒）。Sheets の 429 は「1分あたり」クォータなので、
+      待ち合計が1分を跨ぐ回数にしてある（5回=30秒では跨げず 2026-08-29 に事業処理が落ちた）。
     sleep / on_retry は注入可能（テスト用）。実運用の sleep は time.sleep。"""
     if sleep is None:
         import time
@@ -227,13 +229,23 @@ class GoogleSheetStore(Store):
         self.ws_accounts = with_retry(lambda: self.sh.worksheet("accounts"))
         self.posts_tabs = self._discover_posts_tabs()
 
+    def _ws_by_title(self, refresh: bool = False) -> dict:
+        """{タブ名: worksheet} をインスタンス内でキャッシュして返す（worksheets() の連打を防ぐ）。
+        週次はアカウントごとにプロフィール/ガイドライン/ナレッジ/お手本/投稿…とタブを読むため、
+        毎回 worksheets() を呼ぶと読み取り回数が倍増し 429（Read requests/min）を誘発していた。
+        タブを作成したら refresh=True で取り直す。"""
+        cache = getattr(self, "_ws_cache", None)
+        if cache is None or refresh:
+            cache = self._ws_cache = {ws.title: ws for ws in with_retry(self.sh.worksheets)}
+        return cache
+
     def _discover_posts_tabs(self):
         """投稿タブの一覧 [(worksheet, account_or_None)] を返す。
         - "投稿_<account>" タブ: アカウントはタブ名から決まる
         - 1つも無ければ後方互換で単一 "posts" タブ（アカウントは行の「アカウント」列から）
         """
         tabs = []
-        for ws in with_retry(self.sh.worksheets):
+        for ws in self._ws_by_title().values():
             if ws.title.startswith(POSTS_TAB_PREFIX):
                 tabs.append((ws, ws.title[len(POSTS_TAB_PREFIX):]))
         if not tabs:
@@ -316,7 +328,7 @@ class GoogleSheetStore(Store):
             cache = self._ins_ws_cache = {}
         if title in cache:  # 同一run内で worksheets() を繰り返さない（API呼び出し節約）
             return cache[title]
-        existing = {ws.title: ws for ws in with_retry(self.sh.worksheets)}
+        existing = self._ws_by_title()
         if title in existing:
             ws = existing[title]
             if not with_retry(lambda: ws.row_values(1)):  # ヘッダ未設定なら入れる
@@ -326,6 +338,7 @@ class GoogleSheetStore(Store):
             ws = with_retry(lambda: self.sh.add_worksheet(title=title, rows=2000, cols=max(20, len(headers))))
             with_retry(lambda: self.sh.values_update(
                 f"'{title}'!A1", params={"valueInputOption": "RAW"}, body={"values": [headers]}))
+            self._ws_by_title(refresh=True)  # タブが増えたのでキャッシュを取り直す
         cache[title] = ws
         return ws
 
@@ -410,7 +423,7 @@ class GoogleSheetStore(Store):
 
     # ---- Phase 2（分析/レポート/生成）の読み書き ----
     def _read_tab_raw(self, title: str) -> list[dict]:
-        existing = {w.title: w for w in with_retry(self.sh.worksheets)}
+        existing = self._ws_by_title()
         ws = existing.get(title)
         if ws is None:
             return []
@@ -445,7 +458,7 @@ class GoogleSheetStore(Store):
     def get_knowledge(self, account: str) -> str:
         """ナレッジ_<acc> タブの全文（A列のチャンクを結合）。生成プロンプトの濃い知識源。"""
         title = f"{KNOWLEDGE_TAB_PREFIX}{account}"
-        existing = {w.title: w for w in with_retry(self.sh.worksheets)}
+        existing = self._ws_by_title()
         ws = existing.get(title)
         if ws is None:
             return ""
@@ -476,7 +489,7 @@ class GoogleSheetStore(Store):
     def add_post(self, account: str, fields: dict) -> None:
         """生成投稿を 投稿_<account> タブへ追記（generator 用）。fields は内部キー。"""
         title = f"{POSTS_TAB_PREFIX}{account}"
-        existing = {w.title: w for w in with_retry(self.sh.worksheets)}
+        existing = self._ws_by_title()
         ws = existing.get(title)
         if ws is None:
             raise RuntimeError(f"投稿タブ '{title}' がありません")
