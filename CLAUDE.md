@@ -22,9 +22,9 @@
 >
 > ✅ **09-03の日程重複は解消済み（2026-09-01）**：08-31の `FORCE_CYCLE=1` 復旧実行が生んだ
 > 09-03 の二重予約候補（各アカ4本＝計16行 `*-g20260831-09〜12`）を row_id 指名で `retired` 化した。
-> 09-02 サイクルは 09-03〜09-05 をクリーンに生成できる。教訓：generator は既存在庫を見ず常に
-> 「翌日から3日分」を生成する（`build_schedule` の `not_before` は過去スロット除外専用）ため、
-> **`FORCE_CYCLE=1` を使ったら必ず次サイクルとの日程重複を確認すること**。
+> 09-02 サイクルは 09-03〜09-05 をクリーンに生成できた。**根本対処済み（2026-09-03）**：generator は
+> 既存の未来在庫の最終日の翌日から予約するようになり（`existing_posts` 注入）、`FORCE_CYCLE=1` で
+> 臨時実行しても次サイクルと日程が重複しない。
 >
 > ✅ **PDCA第1段は稼働中（2026-09-01 マージ＋シート移行済み）**：4シート全てに型ラベル3列＋
 > `お手本DB_<acc>`＋`仮説ログ` を追加済み。09-02 サイクルから勝ち/負け本文注入と型ラベル記録が始まる。
@@ -74,7 +74,7 @@ GitHub Actions（すべて別systemの6本）
 - **生成**: `GENERATE_POSTS=1`＋`ANTHROPIC_API_KEY`。`GEN_STATUS`=draft(人が確認)/queued(全自動公開)。**事業別に `GEN_STATUS_<NAME>` で上書き可**（製造業だけdraft等）。生成前に必須タブゲート（§17e）、生成後に機械コンプラゲート。**2026-08-31に seizogyo2/seizogyo3/meguri の `GEN_POSTS_*` を 12 にして全4アカ自動生成ON**（それまでは立ち上げ期の手動運用のため 0＝オフだった）。
 - **メール**: `ENABLE_EMAIL=1` でアカウントごとに週次レポートを個別送信（宛先は Variable `MAIL_TO` / `MAIL_TO_<事業名>`・認証は Gmail アプリパスワード。実アドレスは公開repoに書かない＝§17b）。run失敗時はGitHub純正の失敗通知メールも飛ぶ。
 - **在庫監視**: `monitor.yml`（日次 08:00 JST・読取専用）が各アカの未来在庫と残り日数を算出し、在庫ゼロ/残りわずかのときだけ【要確認】メールを送る。在庫ゼロの間は run を exit 2 で赤くする。**投稿ジョブは在庫ゼロでも成功で終わるため、停止を検知できる唯一の仕組み**（§10・docs/CHANGELOG.md §27）。
-- **テスト**: `python3 -m pytest tests/ -q`（97本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。
+- **テスト**: `python3 -m pytest tests/ -q`（108本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。
 - **過去インシデントの教訓は §10 と docs/CHANGELOG.md（§13/§14/§16/§27）**。特に「row_id 必須・全タブ一意」は絶対。
 
 ---
@@ -139,7 +139,7 @@ scripts/                      ローカルで人が実行するセットアッ�
   sync_knowledge.py           ローカルナレッジ→ナレッジ_タブ同期
   add_pdca_columns.py         PDCA移行: 投稿タブ3列追加＋お手本DB/仮説ログ作成（冪等・DRY-RUN既定）
   local_run.sh                .env読込→DRY_RUN既定でローカル実行
-tests/                        テスト（API不要・モック・97本）。pytest でも直実行でも可
+tests/                        テスト（API不要・モック・108本）。pytest でも直実行でも可
   test_logic.py / test_collect.py / test_phase2.py / test_schedule.py
   test_report_window.py（期間窓・在庫・エラー分類） / test_monitor.py / test_threads_api_masking.py
 sheet_templates/              accounts.csv / posts.csv / posts_example.csv（記入例）
@@ -155,7 +155,7 @@ requirements.txt / .env.example / README.md / SETUP.md
 
 各層の責務:
 - `threads_api.py` … HTTPとAPI仕様の知識のみ。状態を持たない。
-- `sheets.py` … データの読み書き。`Store` インターフェースを実装すれば保管先を差し替え可能（DB化はここ）。全gspread呼び出しは `with_retry`（一過性5xx/429を指数バックオフで吸収）。
+- `sheets.py` … データの読み書き。`Store` インターフェースを実装すれば保管先を差し替え可能（DB化はここ）。全gspread呼び出しは `with_retry`（一過性5xx/429を指数バックオフで吸収・6回=合計62秒で分クォータを跨ぐ）。タブ一覧は `_ws_by_title()` でインスタンス内キャッシュ（429対策）。
 - `publisher.py`/`collector.py`/`generator.py` … ビジネスロジック。`client_factory`/`now_fn`/`generate_fn`/`rng` を注入できるのでテスト容易。`dry_run=True` で無書込実行。
 
 ---
@@ -177,7 +177,7 @@ requirements.txt / .env.example / README.md / SETUP.md
 - `週次レポート` … reporter の追記
 
 **人が curation するタブ（生成の知識源・§17d）**:
-- `プロフィール_<acc>`（項目/内容） … 声・トーン・テーマ・お手本・アカ固有NG
+- `プロフィール_<acc>`（項目/内容） … 声・トーン・テーマ・お手本・アカ固有NG。**項目「フック型語彙」**（" / " 区切り）があればそのアカウントの型ラベル語彙として enum 強制（無ければ `generator.HOOK_TYPES` の汎用6型）。澪は占い専用6型を登録済み
 - `ガイドライン`（分類/ルール/重大度・事業共通） … 規約/法令/NGワード/過去BAN教訓。「NGワード」分類の行が機械ゲートの禁止語源
 - `ナレッジ_<acc>`（A列チャンク） … 事業ナレッジ全文（あれば最優先の知識源）
 - `お手本DB_<acc>`（お手本ID/出典/本文/フック型/内容型/ポジション近接度/実測数/状態/退役理由/メモ/収集日） … 勝ちパターンDB。自アカ当たり/滑り＋競合の当たり投稿。生成は `状態=active` のみ参照。設計は docs/superpowers/specs/2026-09-01-pdca-closed-loop-design.md
