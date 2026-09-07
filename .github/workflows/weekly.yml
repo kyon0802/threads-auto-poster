@@ -2,9 +2,9 @@ name: threads-weekly-report
 
 on:
   schedule:
-    # 毎日 06:00 JST（= 21:00 UTC）に起動するが、main_weekly.py 内の3日サイクルゲートが
-    # 起点日(2026-06-28)から3日ごとの日だけ本処理を実行する（それ以外の日は即終了）。
-    # ＝「3日分の投稿生成→3日分を分析してレポート」を3日に1回のPDCAで回す。
+    # 毎日 06:00 JST（= 21:00 UTC）に起動するが、main_weekly.py 内の曜日ゲートが
+    # 生成は毎週 日曜・水曜、レポートは毎週 日曜だけ本処理を実行する（それ以外の日は即終了）。
+    # ＝「次の生成日までの日数分の投稿生成→分析してレポート（日曜のみ）」を週2回のPDCAで回す。
     - cron: "0 21 * * *"
   workflow_dispatch: {}   # 手動実行。FORCE_CYCLE=1 を Variable に入れるとサイクル日以外でも実行可。
 
@@ -50,15 +50,17 @@ jobs:
           GEN_STATUS_SEIZOGYO2: ${{ vars.GEN_STATUS_SEIZOGYO2 || '' }}
           GEN_STATUS_SEIZOGYO3: ${{ vars.GEN_STATUS_SEIZOGYO3 || '' }}
           GEN_POSTS_PER_ACCOUNT: ${{ vars.GEN_POSTS_PER_ACCOUNT || '5' }}
-          # 1日4本スケジュール対象（製造業/占い）は1サイクル分＝3日×4本＝12本（既定）。
-          # 個別に上書きしたいときだけ Variable で設定。
-          GEN_POSTS_SEIZOGYO: ${{ vars.GEN_POSTS_SEIZOGYO || '12' }}
-          GEN_POSTS_URANAI: ${{ vars.GEN_POSTS_URANAI || '12' }}
-          GEN_POSTS_MEGURI: ${{ vars.GEN_POSTS_MEGURI || '12' }}
-          # seizogyo2（住田）/seizogyo3（ぱし）は立ち上げ期は手動R1バッチ運用のため既定0＝生成オフ
-          # （手動投稿と自動生成の二重投稿を防ぐ）。自動生成を始めるときに Variable を 12 にする。
-          GEN_POSTS_SEIZOGYO2: ${{ vars.GEN_POSTS_SEIZOGYO2 || '0' }}
-          GEN_POSTS_SEIZOGYO3: ${{ vars.GEN_POSTS_SEIZOGYO3 || '0' }}
+          # 1日4本スケジュール対象（製造業/占い）は「次の生成サイクル日までの日数×4本」で
+          # main_weekly.py の n_posts_for がコード側で自動計算する（日曜=12本／水曜=16本）。
+          # ここでフォールバック値（|| '12' 等）を入れると Variable が常に非空になり、
+          # 動的計算が一度も発動しなくなる（曜日に関わらず固定本数になり隙間/重複の原因）ので
+          # 付けないこと。Variable は「0=その事業だけ生成オフ」の用途にだけ使う。
+          GEN_POSTS_SEIZOGYO: ${{ vars.GEN_POSTS_SEIZOGYO }}
+          GEN_POSTS_URANAI: ${{ vars.GEN_POSTS_URANAI }}
+          GEN_POSTS_MEGURI: ${{ vars.GEN_POSTS_MEGURI }}
+          # seizogyo2（住田）/seizogyo3（ぱし）も同様。0を設定すればその事業だけ生成オフにできる。
+          GEN_POSTS_SEIZOGYO2: ${{ vars.GEN_POSTS_SEIZOGYO2 }}
+          GEN_POSTS_SEIZOGYO3: ${{ vars.GEN_POSTS_SEIZOGYO3 }}
           GEN_MODEL: ${{ vars.GEN_MODEL || 'claude-opus-4-8' }}
           # キルスイッチ: Variable PAUSED=1 で生成・投稿を即停止。
           PAUSED: ${{ vars.PAUSED || '0' }}

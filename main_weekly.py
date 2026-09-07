@@ -252,7 +252,7 @@ def main() -> int:
                 if not generate:
                     gen_info = {"ok": None, "reason": "生成オフ（GENERATE_POSTS=0 または PAUSED=1）"}
                 else:
-                    acc_n_posts = n_posts_for(name, os.environ, n_posts)
+                    acc_n_posts = n_posts_for(name, os.environ, n_posts, today)
                     # GEN_POSTS_<NAME>=0 ＝ その事業だけ生成オフ（立ち上げ期の手動運用と自動生成の
                     # 二重投稿を防ぐ per-business スイッチ。分析・レポートは通常どおり実施）。
                     if acc_n_posts <= 0:

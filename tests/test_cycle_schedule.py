@@ -85,6 +85,70 @@ def test_n_posts_for_empty_variable_falls_back_to_dynamic():
     print("  ✓ 空のGEN_POSTS_<NAME>は動的計算にフォールバック OK")
 
 
+def test_main_calls_n_posts_for_with_four_args():
+    """main_weekly.py の main() 内 n_posts_for(...) 呼び出しは4引数であること。
+
+    引数不一致（3引数のまま）は TypeError になり、main() の per-account try/except
+    に握り潰されて failures += 1 されるだけになる。結果、全アカウントで生成0本・
+    週次レポートメールが1通も出ない・sort_posts_tab も走らないという広範囲の
+    サイレント停止を招く。114本のユニットテストが緑でもこの呼び出し不整合は検出
+    できなかったため、シグネチャを機械的に固定して同種の再発を防ぐ。
+    """
+    import ast
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(repo_root, "main_weekly.py")
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read(), filename=path)
+
+    main_func = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            main_func = node
+            break
+    assert main_func is not None, "main_weekly.py に関数 main が見つかりません"
+
+    calls = [
+        node for node in ast.walk(main_func)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "n_posts_for"
+    ]
+    assert calls, "main() 内に n_posts_for(...) 呼び出しが見つかりません（見落とし防止）"
+    for call in calls:
+        assert len(call.args) == 4, (
+            f"n_posts_for の位置引数は4つのはずが {len(call.args)} 個でした: "
+            f"{ast.dump(call)}"
+        )
+    print("  ✓ main() 内の n_posts_for 呼び出しは4引数 OK")
+
+
+def test_weekly_yml_gen_posts_vars_have_no_fallback():
+    """weekly.yml の GEN_POSTS_<事業名> にフォールバック（||）が無いこと。
+
+    n_posts_for は環境変数が「空」のときだけ曜日ベースの動的計算（日=12本/水=16本）に
+    フォールバックする。weekly.yml 側で `${{ vars.GEN_POSTS_X || '12' }}` のように
+    フォールバック値を入れると Variable が常に非空になり、動的計算が本番で一度も
+    発動しなくなる（このバグ自体が今回の修正対象だった）。GEN_POSTS_PER_ACCOUNT は
+    4本/日スケジュール対象外の事業向けの既定値でフォールバックの対象外。
+    """
+    import re
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(repo_root, ".github", "workflows", "weekly.yml")
+    with open(path, encoding="utf-8") as f:
+        lines = f.readlines()
+
+    target_lines = [
+        line for line in lines
+        if re.search(r"\bGEN_POSTS_(?!PER_ACCOUNT\b)\w+\s*:", line)
+    ]
+    assert target_lines, "weekly.yml に GEN_POSTS_<事業名> の行が見つかりません（見落とし防止）"
+    for line in target_lines:
+        assert "||" not in line, f"フォールバックが残っています: {line.strip()}"
+    print("  ✓ weekly.yml の GEN_POSTS_<事業名> にフォールバック無し OK")
+
+
 if __name__ == "__main__":
     test_is_cycle_day_sunday_and_wednesday()
     test_is_report_day_sunday_only()
@@ -94,4 +158,6 @@ if __name__ == "__main__":
     test_n_posts_for_zero_variable_turns_generation_off()
     test_n_posts_for_explicit_override_is_backward_compatible()
     test_n_posts_for_empty_variable_falls_back_to_dynamic()
+    test_main_calls_n_posts_for_with_four_args()
+    test_weekly_yml_gen_posts_vars_have_no_fallback()
     print("========== 全テスト PASS ==========")
