@@ -149,6 +149,24 @@ def test_weekly_yml_gen_posts_vars_have_no_fallback():
     print("  ✓ weekly.yml の GEN_POSTS_<事業名> にフォールバック無し OK")
 
 
+def test_decide_gates_by_weekday():
+    """日=生成+レポート / 水=生成のみ / それ以外=何もしない。"""
+    from main_weekly import decide_gates
+    assert decide_gates(date(2026, 9, 6), {}) == (True, True)     # 日
+    assert decide_gates(date(2026, 9, 9), {}) == (True, False)    # 水
+    assert decide_gates(date(2026, 9, 7), {}) == (False, False)   # 月
+    assert decide_gates(date(2026, 9, 12), {}) == (False, False)  # 土
+    print("  ✓ decide_gates（日=生成+報告 / 水=生成のみ / 他=なし）OK")
+
+
+def test_decide_gates_force_cycle_forces_both():
+    """FORCE_CYCLE=1 は手動実行用。生成もレポートも両方走らせる。"""
+    from main_weekly import decide_gates
+    assert decide_gates(date(2026, 9, 7), {"FORCE_CYCLE": "1"}) == (True, True)
+    assert decide_gates(date(2026, 9, 9), {"FORCE_CYCLE": "1"}) == (True, True)
+    print("  ✓ decide_gates（FORCE_CYCLE=1 で両方強制）OK")
+
+
 if __name__ == "__main__":
     test_is_cycle_day_sunday_and_wednesday()
     test_is_report_day_sunday_only()
@@ -160,4 +178,6 @@ if __name__ == "__main__":
     test_n_posts_for_empty_variable_falls_back_to_dynamic()
     test_main_calls_n_posts_for_with_four_args()
     test_weekly_yml_gen_posts_vars_have_no_fallback()
+    test_decide_gates_by_weekday()
+    test_decide_gates_force_cycle_forces_both()
     print("========== 全テスト PASS ==========")

@@ -88,6 +88,17 @@ def days_until_next_cycle(today: date) -> int:
     raise AssertionError("GEN_WEEKDAYS が空です（設定ミス）")
 
 
+def decide_gates(today: date, env) -> tuple[bool, bool]:
+    """(生成するか, レポートするか) を返す。
+
+    生成は週2回（日・水）、レポートは週1回（日）。水曜は生成だけ走りレポートは出ない。
+    FORCE_CYCLE=1（手動実行）は両方を強制する。
+    """
+    if env.get("FORCE_CYCLE") == "1":
+        return True, True
+    return is_cycle_day(today), is_report_day(today)
+
+
 def send_account_reports(reports: list[dict], *, user: str, password: str, to: str,
                          gen_date: str = "", send_fn=None) -> tuple[int, int]:
     """アカウントごとに1通ずつ個別メールを送る。(送信成功数, 失敗数) を返す。
@@ -193,13 +204,18 @@ def main() -> int:
     if not sa_json or not sheets:
         log.error("GOOGLE_SERVICE_ACCOUNT_JSON と (BUSINESSES または SPREADSHEET_ID) が必要です")
         return 1
-    # 曜日ゲート: cron は毎日叩くが、生成サイクル日（日・水）だけ本処理（分析→レポート→生成→メール）
-    # を実行する。それ以外の日は即終了（次サイクルまで待機）。FORCE_CYCLE=1 で手動実行時はバイパス。
+    # サイクルゲート（曜日固定）: cron は毎日叩くが、生成は日・水、レポートは日だけ実行する。
+    # どちらでもない日は即終了。FORCE_CYCLE=1（手動実行）は両方を強制する。
     today = datetime.now(ZoneInfo(tz_name)).date()
-    if os.environ.get("FORCE_CYCLE") != "1" and not is_cycle_day(today):
-        log.info("サイクル日外（本日=%s / 次回サイクルまで%d日）→ 本日は実行しません（次サイクルまで待機）",
-                 today, days_until_next_cycle(today))
+    do_generate_cycle, do_report = decide_gates(today, os.environ)
+    if not (do_generate_cycle or do_report):
+        log.info("本日 %s(%s) は生成日でもレポート日でもないため実行しません（生成=日・水 / レポート=日）",
+                 today, "月火水木金土日"[today.weekday()])
         return 0
+    log.info("本日 %s(%s) の実行内容: 生成=%s / レポート=%s（生成対象日数=%d日）",
+             today, "月火水木金土日"[today.weekday()],
+             "する" if do_generate_cycle else "しない",
+             "する" if do_report else "しない", days_until_next_cycle(today))
     # キルスイッチ: PAUSED=1 なら生成を止める（分析・レポートは無害なので継続）
     if os.environ.get("PAUSED") == "1" and generate:
         log.info("PAUSED=1：一時停止中のため生成は行いません（分析・レポートのみ）")
@@ -240,8 +256,10 @@ def main() -> int:
                 # 生成プロンプトへ届かせる＝PDCA閉ループの結線・2026-09-01設計）
                 enrich_tops_with_text(posts_all, acc, analysis)
                 totals["analyzed"] += 1
-                Reporter(store).run(acc, analysis, gen_date)
-                totals["reported"] += 1
+                # レポートタブへの追記は週1回（日曜）だけ。生成日（水曜）は分析と生成のみ。
+                if do_report:
+                    Reporter(store).run(acc, analysis, gen_date)
+                    totals["reported"] += 1
 
                 # ── 生成（★レポートより先に実行する）─────────────────────────────
                 # 以前はレポートHTMLを組んだ後に生成していたため、生成の成否をレポートに
@@ -249,7 +267,9 @@ def main() -> int:
                 # レポートから読み取れなかった原因なので、先に走らせて結果を持ち回る。
                 # 生成の例外はここで受け止め、レポート・メールは必ず最後まで出す。
                 gen_info = None
-                if not generate:
+                if not do_generate_cycle:
+                    gen_info = {"ok": None, "reason": "本日は生成日ではありません（生成=日・水）"}
+                elif not generate:
                     gen_info = {"ok": None, "reason": "生成オフ（GENERATE_POSTS=0 または PAUSED=1）"}
                 else:
                     acc_n_posts = n_posts_for(name, os.environ, n_posts, today)
@@ -285,7 +305,7 @@ def main() -> int:
 
                 # ── レポート成果物（本文結合・方針生成・HTML）はメール対象の事業だけ ──
                 # （対象外の事業は分析・レポートタブ更新・投稿生成のみ＝無駄なAI課金/レンダリングを避ける）。
-                if in_email:
+                if in_email and do_report:
                     followers = follower_trend(read_account_metrics(store, acc), now=now_local)
                     runway = compute_runway(posts_all, acc, now=now_local,
                                             posts_per_day=POSTS_PER_DAY)
@@ -311,7 +331,9 @@ def main() -> int:
                                           "business": name, "html": html, "filename": fname,
                                           "alert": alert})
                 # 投稿タブを投稿日時の降順に整える（新しい日付が上）。生成で追記した行も上に来る。
-                store.sort_posts_tab(acc, descending=True)
+                # 行を追加していないレポート専用日は並べ替え不要（無駄なSheets APIを撃たない）。
+                if do_generate_cycle:
+                    store.sort_posts_tab(acc, descending=True)
             except Exception as e:  # noqa: BLE001 分析/レポート/シート書込の失敗
                 failures += 1
                 log.exception("%s の週次処理に失敗: %s", acc, e)
