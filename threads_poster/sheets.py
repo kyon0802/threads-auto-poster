@@ -140,6 +140,22 @@ PROFILE_TAB_PREFIX = "プロフィール_"               # 声/テーマ/お手�
 GUIDELINE_TAB = "ガイドライン"                      # 規約/法令/NGワード（事業共通・人が curation）
 WEEKLY_REPORT_TAB = "週次レポート"                   # 週次サマリ（システム追記）
 KNOWLEDGE_TAB_PREFIX = "ナレッジ_"                  # 生成エンジンが読む事業ナレッジ全文（非公開シートのみ・§17b）
+HALL_OF_FAME_TAB_PREFIX = "殿堂入り_"  # 自アカの長期の当たり投稿DB（全期間の表示回数 上位30本）
+HALL_OF_FAME_FIELD_ALIASES = {
+    "rank":            ["順位", "rank"],
+    "posted_id":       ["投稿後ID", "posted_id"],
+    "post_datetime":   ["投稿日時", "post_datetime"],
+    "text":            ["本文", "text"],
+    "views":           ["表示回数", "views"],
+    "engagement_rate": ["エンゲージ率", "engagement_rate"],
+    "hook_type":       ["フック型", "hook_type"],
+    "content_type":    ["内容型", "content_type"],
+    # 保護＝人が手で入れた/残したい行の印。非空なら自動更新で消さない。
+    "protected":       ["保護", "protected"],
+    "note":            ["メモ", "note"],
+    "updated_at":      ["更新日", "updated_at"],
+}
+
 EXEMPLAR_TAB_PREFIX = "お手本DB_"   # 勝ちパターンDB（自アカ当たり/滑り＋競合。人＋AIが curation）
 HYPOTHESIS_TAB = "仮説ログ"          # サイクルごとの仮説→結果（システム追記＋人が手書き可）
 
@@ -213,6 +229,14 @@ class Store(ABC):
     def get_exemplars(self, account: str) -> list[dict]:
         """お手本DB（勝ちパターンDB）。既定は空＝DBが無くても生成は従来どおり動く。"""
         return []
+
+    def get_hall_of_fame(self, account: str) -> list[dict]:
+        """殿堂入り（自アカ長期の当たり投稿）。既定は空＝タブが無くても生成は動く。"""
+        return []
+
+    def write_hall_of_fame(self, account: str, rows: list[dict]) -> None:
+        """殿堂入りタブを書き換える（既定 no-op）。保護行の温存は呼び出し側で組み立て済み。"""
+        return None
 
 
 # ---------------- 本番: Google Sheets ----------------
@@ -465,6 +489,26 @@ class GoogleSheetStore(Store):
         col = with_retry(lambda: ws.col_values(1))
         return "\n".join(c for c in col[1:] if c)  # 1行目はヘッダ
 
+    def get_hall_of_fame(self, account: str) -> list[dict]:
+        recs = self._read_tab_raw(f"{HALL_OF_FAME_TAB_PREFIX}{account}")
+        if not recs:
+            return []
+        to_internal, _ = header_maps(list(recs[0].keys()), HALL_OF_FAME_FIELD_ALIASES)
+        return [{to_internal.get(k, k): v for k, v in r.items()} for r in recs]
+
+    def write_hall_of_fame(self, account: str, rows: list[dict]) -> None:
+        """殿堂入りタブを全置換する。中身は build_hall_of_fame が保護行込みで組んだ結果。
+        （元データはインサイト/投稿タブに残るので、このタブ自体は再計算可能な派生物）"""
+        title = f"{HALL_OF_FAME_TAB_PREFIX}{account}"
+        header = canonical_headers(HALL_OF_FAME_FIELD_ALIASES)
+        keys = list(HALL_OF_FAME_FIELD_ALIASES.keys())
+        ws = self._get_or_create_ws(title, header)
+        with_retry(ws.clear)
+        body = [header] + [["" if r.get(k) is None else str(r.get(k, "")) for k in keys]
+                           for r in rows]
+        with_retry(lambda: self.sh.values_update(
+            f"'{title}'!A1", params={"valueInputOption": "RAW"}, body={"values": body}))
+
     def get_exemplars(self, account: str) -> list[dict]:
         recs = self._read_tab_raw(f"{EXEMPLAR_TAB_PREFIX}{account}")
         if not recs:
@@ -617,3 +661,11 @@ class MemoryStore(Store):
 
     def get_exemplars(self, account: str) -> list[dict]:
         return list(getattr(self, "exemplars", {}).get(account, []))
+
+    def get_hall_of_fame(self, account: str) -> list[dict]:
+        return list(getattr(self, "hall_of_fame", {}).get(account, []))
+
+    def write_hall_of_fame(self, account: str, rows: list[dict]) -> None:
+        if not hasattr(self, "hall_of_fame"):
+            self.hall_of_fame = {}
+        self.hall_of_fame[account] = [dict(r) for r in rows]

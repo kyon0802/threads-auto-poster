@@ -22,7 +22,12 @@ from datetime import datetime, timedelta
 logger = logging.getLogger("analyzer")
 
 WINDOW_DAYS = 7        # KPI・ランキングの集計窓（「今週」）
-TREND_WINDOW_DAYS = 28  # 傾向分析（時間帯/曜日/本文長/形式）の集計窓
+TREND_WINDOW_DAYS = 60  # 傾向分析の主軸（既存キー by_* が指す窓）
+# ★2026-09-07: 傾向分析を3窓にした（オーナー決定）。28日1本だと「直近の揺れ」しか見えず、
+# 蓄積した長期データ（takumi 161投稿・6月から）が活きていなかった。
+# 主軸を60日に広げてサンプルを増やしつつ、180日と全期間を併記して変化を読めるようにする。
+# None = 期間で絞らない（全期間）。
+TREND_WINDOWS = (("60日", 60), ("180日", 180), ("全期間", None))
 
 TIME_BANDS = [("深夜(0-5)", 0, 5), ("朝(6-11)", 6, 11), ("昼(12-17)", 12, 17), ("夜(18-23)", 18, 23)]
 WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
@@ -189,13 +194,22 @@ def analyze_windowed(rows: list[dict], *, now: datetime,
 
     cur = analyze_insights(_in_date_range(rows, cur_start, today))
     prev = analyze_insights(_in_date_range(rows, prev_start, prev_end))
-    trend = analyze_insights(_in_date_range(rows, trend_start, today))
     life = analyze_insights(rows)
 
+    # 傾向分析は3窓（60日/180日/全期間）。主軸＝先頭の窓で既存キー by_* を埋める。
+    trends = {}
+    for label, days in TREND_WINDOWS:
+        sub = life if days is None else analyze_insights(
+            _in_date_range(rows, today - timedelta(days=days - 1), today))
+        trends[label] = {"n_posts": sub["n_posts"],
+                         **{k: sub[k] for k in ("by_time", "by_weekday", "by_length", "by_tree")}}
+    trend = analyze_insights(_in_date_range(rows, trend_start, today))
+
     out = dict(cur)  # 上位キー＝「今週」
-    # 傾向軸だけは長い窓の結果で置き換える（KPIは7日・傾向は28日）
+    # 傾向軸だけは長い窓の結果で置き換える（KPIは7日・傾向は主軸窓）
     for key in ("by_time", "by_weekday", "by_length", "by_tree"):
         out[key] = trend[key]
+    out["trends"] = trends
     out["trend_n_posts"] = trend["n_posts"]
     # 生成プロンプト注入用の勝ち/負け実物（28日窓。7日窓では12本しかなくサンプル不足のため）
     out["trend_top"] = trend["top"]
@@ -269,10 +283,19 @@ def analysis_to_rows(a: dict) -> list[list]:
         life = a.get("lifetime") or {}
         rows.append(["期間", "累計(全期間)", life.get("n_posts", 0),
                      life.get("total_views", 0), life.get("avg_er", "")])
-    for axis, key in [("時間帯", "by_time"), ("曜日", "by_weekday"),
-                      ("本文長", "by_length"), ("ツリー有無", "by_tree")]:
-        for (label, n, av, er) in a[key]:
-            rows.append([axis, label, n, av, er])
+    # 傾向は3窓を窓名つきで並べる（人がタブを開いて「いつの傾向か」を取り違えないため）。
+    trends = a.get("trends")
+    if trends:
+        for win, t in trends.items():
+            for axis, key in [("時間帯", "by_time"), ("曜日", "by_weekday"),
+                              ("本文長", "by_length"), ("ツリー有無", "by_tree")]:
+                for (label, n, av, er) in t[key]:
+                    rows.append([f"{axis}({win})", label, n, av, er])
+    else:  # 窓なしの素の分析（analyze_insights 単体）
+        for axis, key in [("時間帯", "by_time"), ("曜日", "by_weekday"),
+                          ("本文長", "by_length"), ("ツリー有無", "by_tree")]:
+            for (label, n, av, er) in a[key]:
+                rows.append([axis, label, n, av, er])
     return rows
 
 
@@ -292,6 +315,8 @@ class Analyzer:
 
     def run(self, account: str) -> dict:
         rows = self.store.get_insights(account)
+        # 殿堂入りの構築が同じ行を使えるように保持する（再読込するとSheetsの429を誘発するため）
+        self.last_rows = rows
         now = self.now_fn()
         # シートの投稿日時はJSTのnaive文字列なので、基準時刻もnaiveに揃える
         if getattr(now, "tzinfo", None) is not None:

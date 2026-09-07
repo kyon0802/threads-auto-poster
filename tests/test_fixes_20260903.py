@@ -180,7 +180,8 @@ def test_generation_with_schedule_fn_starts_after_stock():
     import random
     from threads_poster.schedule import build_schedule
     store = _stocked_store("2026-06-27")
-    cands = [f"本文{i}。" for i in range(4)]
+    cands = ["夜勤明けの空が白んでいく時間が好きだった。", "手取りの話を、そろそろ正直にします。",
+             "未経験から入って三ヶ月で変わったことを書きます。", "面接で必ず聞くべき質問がひとつあります。"]
     Generator(store, "a1", generate_fn=lambda p: cands, now_fn=lambda: NOW,
               status="queued", schedule_fn=build_schedule, rng=random.Random(0)
               ).run({}, candidates=cands, existing_posts=store.posts)

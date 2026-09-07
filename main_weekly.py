@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 
 from threads_poster.sheets import GoogleSheetStore
 from threads_poster.analyzer import Analyzer, follower_trend
+from threads_poster.hall_of_fame import build_hall_of_fame
 from threads_poster.errors import classify_generation_error
 from threads_poster.inventory import compute_runway, runway_message
 from threads_poster.reporter import Reporter
@@ -251,11 +252,26 @@ def main() -> int:
         in_email = (not email_businesses) or (name in email_businesses)
         for acc in accounts:
             try:
-                analysis = Analyzer(store, now_fn=lambda: now_local).run(acc)
+                analyzer = Analyzer(store, now_fn=lambda: now_local)
+                analysis = analyzer.run(acc)
                 # ランキングに本文を結合（★生成より前・全事業で実施。勝ち/負けの実物を
                 # 生成プロンプトへ届かせる＝PDCA閉ループの結線・2026-09-01設計）
                 enrich_tops_with_text(posts_all, acc, analysis)
                 totals["analyzed"] += 1
+                # ── 殿堂入り（自アカ長期の当たり30本）を更新 ──────────────────
+                # 生成日だけ更新すれば足りる（レポートには出さない＝オーナー決定）。
+                # 材料は analyzer が読んだインサイト行と読み済みの posts_all＝追加読み取りなし。
+                # 人が「保護」列を付けた行は build_hall_of_fame が温存する。
+                if do_generate_cycle:
+                    try:
+                        hof = build_hall_of_fame(
+                            getattr(analyzer, "last_rows", []), posts_all,
+                            store.get_hall_of_fame(acc), now=now_local)
+                        store.write_hall_of_fame(acc, hof)
+                        log.info("%s: 殿堂入り %d本を更新（最高表示%s）", acc, len(hof),
+                                 hof[0]["views"] if hof else "-")
+                    except Exception as e:  # noqa: BLE001 殿堂入りの失敗で生成本体を止めない
+                        log.warning("%s: 殿堂入りの更新に失敗（生成は継続）: %s", acc, e)
                 # レポートタブへの追記は週1回（日曜）だけ。生成日（水曜）は分析と生成のみ。
                 if do_report:
                     Reporter(store).run(acc, analysis, gen_date)

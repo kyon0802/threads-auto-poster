@@ -18,7 +18,8 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from .compliance import check_post, extract_ng_words
+from .compliance import check_post, extract_ng_words, find_near_duplicate
+from .hall_of_fame import select_for_prompt
 
 logger = logging.getLogger("generator")
 DEFAULT_MODEL = "claude-opus-4-8"
@@ -46,7 +47,8 @@ def _normalize_candidates(candidates: list) -> list[dict]:
 
 def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: dict, n: int,
                  knowledge: str = "", exemplars: list[dict] | None = None,
-                 hook_types: list[str] | None = None) -> str:
+                 hook_types: list[str] | None = None,
+                 hall_of_fame: list[dict] | None = None) -> str:
     hook_types = list(hook_types) if hook_types else hook_types_for(profile)
     guide = "\n".join(f"- [{g.get('重大度')}] {g.get('分類')}: {g.get('ルール')}" for g in guideline)
     wins = []
@@ -74,7 +76,10 @@ def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: d
     if analysis.get("trend_n_posts", 0) < 8:
         bottoms = []
     real = _fmt(tops, "勝ち") + _fmt(bottoms, "負け")
-    real_section = ("## 実績の実物（直近28日・勝ちと負けの差から学ぶ。負けの真似は禁止）\n"
+    real_section = ("## 実績の実物（勝ちと負けの差から学ぶ。負けの真似は禁止）\n"
+                    "※**本文をそのまま／言い換えただけで再利用するのは禁止**。"
+                    "同じ本文の再投稿はスパム判定を招くため、機械的に破棄される。"
+                    "学ぶのは『なぜ刺さったか』の構造（フックの型・切り口・語順）だけ。\n"
                     + "\n\n".join(real) + "\n\n") if real else ""
 
     # ── お手本DB（active のみ・最大7本・別ポジは構造だけ参考）─────────────────
@@ -88,6 +93,21 @@ def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: d
                         f"{str(ex.get('text') or '').strip()}")
         if len(ex_lines) >= 7:
             break
+    # ── 殿堂入り（自アカの長期の当たり・2026-09-07追加）─────────────────────
+    # 直近窓だけだと3ヶ月前の自己ベストがAIに届かない（takumi 3,759表示・澪は上位5本全部）。
+    # trend_top と同じ投稿は二度見せない。
+    seen_pids = {str(e.get("posted_id")) for e in tops}
+    hof_lines = []
+    for h in (hall_of_fame or []):
+        text = str(h.get("text") or "").strip()
+        if not text or str(h.get("posted_id")) in seen_pids:
+            continue
+        hof_lines.append(f"◆殿堂入り{h.get('rank', '')}位（表示{h.get('views', 0)}回・"
+                         f"{str(h.get('post_datetime') or '')[:10]}）\n{text}")
+    hof_section = ("## 殿堂入り（このアカウントが過去に最も伸ばした投稿。直近だけでなく"
+                   "全期間から選んでいる。何が刺さったのかを構造から学ぶ。丸写しはしない）\n"
+                   + "\n\n".join(hof_lines) + "\n\n") if hof_lines else ""
+
     ex_section = ("## お手本DB（模倣した手本のIDを exemplar_id で必ず申告する）\n"
                   + "\n\n".join(ex_lines) + "\n\n") if ex_lines else ""
 
@@ -108,6 +128,7 @@ def build_prompt(account: str, profile: dict, guideline: list[dict], analysis: d
         f"## ガイドライン（厳守・違反した投稿は機械的に破棄される）\n{guide}\n\n"
         f"## 実績の勝ちパターン（集計）\n" + ("／".join(wins) if wins else "（データ蓄積中・お手本の型を踏襲）") + "\n\n"
         f"{real_section}"
+        f"{hof_section}"
         f"{ex_section}"
         f"{type_section}\n"
         f"{THREADS_HOOK_RULES}\n\n"
@@ -237,8 +258,11 @@ class Generator:
             exemplars = self.store.get_exemplars(self.account)
             known_exemplar_ids = {str(ex.get("exemplar_id")) for ex in exemplars}
             hook_types = hook_types_for(profile)
+            # 殿堂入りは30本のDBなので、そのまま渡さず今回ぶんだけ回して見せる（同質化を防ぐ）。
+            hof = select_for_prompt(self.store.get_hall_of_fame(self.account), now=self.now_fn())
             prompt = build_prompt(self.account, profile, guideline, analysis, self.n_posts,
-                                  knowledge=knowledge, exemplars=exemplars, hook_types=hook_types)
+                                  knowledge=knowledge, exemplars=exemplars, hook_types=hook_types,
+                                  hall_of_fame=hof)
             gen = self.generate_fn or make_anthropic_generate_fn(self.model, self.n_posts,
                                                                  hook_types=hook_types)
             candidates = _call_generate_fn(gen, prompt, hook_types)
@@ -263,10 +287,26 @@ class Generator:
         # 以前は常に「今日の翌日」から始めたため、FORCE_CYCLE で臨時実行すると次サイクルと
         # 日程が重複した（09-03 が各アカ8本＝16行を手で退避）。
         anchor = _stock_anchor(existing_posts, self.account, now)
+        # 重複ゲートの比較対象＝このアカウントの既存本文（公開済み＋未公開の予約とも比べる）。
+        # existing_posts は事業で読み済みのものを受け取る＝追加読み取りなし。
+        seen_texts = [str(p.get("text") or "") for p in (existing_posts or [])
+                      if str(p.get("account") or "") == str(self.account)
+                      and str(p.get("status") or "").strip() != "retired"
+                      and str(p.get("text") or "").strip()]
         kept, rejected = [], []
         for c in candidates:
             ok, reasons = check_post(c["text"], ng)
-            (kept.append(c) if ok else rejected.append({"text": c["text"], "reasons": reasons}))
+            if ok:
+                # 既存＋この回で既に採用した分と重複しないこと（同一バッチ内の重複も落とす）
+                dup = find_near_duplicate(c["text"], seen_texts)
+                if dup is not None:
+                    ok = False
+                    reasons = [f"既存投稿と重複（丸写し・言い換え再投稿の防止）: {dup[:30]}…"]
+            if ok:
+                kept.append(c)
+                seen_texts.append(c["text"])
+            else:
+                rejected.append({"text": c["text"], "reasons": reasons})
 
         # 予約時刻の割り当て。schedule_fn があればそれ（製造業＝1日4本・ランダム）、
         # 無ければ従来どおり「翌日から1日1本・suggest_hour固定」。

@@ -64,17 +64,21 @@ def test_delta_is_none_when_previous_is_zero():
 
 def test_trend_axes_use_longer_window():
     # 傾向分析（時間帯/曜日など）は7日だと曜日あたり1本になりサンプル不足。
-    # 既定28日の窓で集計し、7日窓とは別系統であることを保証する。
-    rows = [ins("c1", "2026-07-27 21:00", 100),   # 直近7日にも28日にも入る
-            ins("t1", "2026-07-05 21:00", 100),   # 28日窓のみ
-            ins("old", "2026-05-01 21:00", 100)]  # 28日窓の外
+    # 2026-09-07に主軸を28日→60日へ広げ、さらに180日/全期間を併記する3窓にした
+    # （蓄積した長期データを活かすため。docs/superpowers/specs/2026-09-07-hall-of-fame-design.md）。
+    rows = [ins("c1", "2026-07-27 21:00", 100),   # 直近7日にも60日にも入る
+            ins("t1", "2026-07-05 21:00", 100),   # 60日窓のみ
+            ins("old", "2026-05-01 21:00", 100)]  # 60日窓の外・全期間には入る
     a = analyze_windowed(rows, now=NOW)
     assert a["n_posts"] == 1, a["n_posts"]                     # KPIは7日
-    assert a["trend_n_posts"] == 2, a["trend_n_posts"]         # 傾向は28日
+    assert a["trend_n_posts"] == 2, a["trend_n_posts"]         # 主軸の傾向は60日
     night = [t for t in a["by_time"] if t[0].startswith("夜")][0]
-    assert night[1] == 2, night                                # 傾向軸は28日窓の件数
-    assert a["window_days"] == 7 and a["trend_window_days"] == 28
-    print("  ✓ 傾向分析は長め(28日)の窓・KPIは7日窓 OK")
+    assert night[1] == 2, night                                # 傾向軸は主軸(60日)窓の件数
+    assert a["window_days"] == 7 and a["trend_window_days"] == 60
+    # 3窓が揃い、全期間だけが窓外の "old" を拾う
+    assert a["trends"]["60日"]["n_posts"] == 2
+    assert a["trends"]["全期間"]["n_posts"] == 3
+    print("  ✓ 傾向分析は3窓(60日/180日/全期間)・主軸60日・KPIは7日窓 OK")
 
 
 def test_top_ranking_is_scoped_to_current_window():

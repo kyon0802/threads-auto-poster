@@ -166,7 +166,14 @@ def test_generator_with_schedule_fn_4_per_day():
     store = MemoryStore([{"account": "takumi_kojo_navi"}], [])
     store.profiles = {"takumi_kojo_navi": {"声": "現場目線"}}
     store.guideline = [{"分類": "NGワード", "ルール": "絶対", "重大度": "高"}]
-    cands = [f"製造業の話 その{i}。" for i in range(6)]  # 6本 → 翌日4本＋翌々日2本
+    # 素材は互いに十分違う本文にする（重複ゲート=2026-09-07 が近似文を落とすため。
+    # このテストの目的はスケジュール割当の検証であって重複判定ではない）。
+    cands = ["夜勤明けの帰り道、コンビニの明かりがやけに眩しい。",
+             "工場は底辺という言葉を、現場を知らない人ほど使う。",
+             "手取り18万で消えていく給料明細を、何年見てきましたか。",
+             "未経験でも三ヶ月で一人前になれる持ち場は、実際にあります。",
+             "資格を取れと言われるが、本当に効くのは二つだけです。",
+             "面接で聞くべきことを、誰も教えてくれないまま入社してしまう。"]  # 6本 → 翌日4本＋翌々日2本
     Generator(store, "takumi_kojo_navi", generate_fn=lambda p: cands, now_fn=lambda: NOW,
               status="queued", schedule_fn=build_schedule, rng=random.Random(0)
               ).run({}, candidates=cands)
