@@ -242,7 +242,13 @@ requirements.txt / .env.example / README.md / SETUP.md
 
 ## 8. 未決定事項（Masterに確認すべき）
 
-- トークンのシート保管はセキュリティ上の妥協。アカウント数が増えるなら `Store` をDB（Supabase/SQLite等）実装に差し替える判断。
+- ~~トークンのシート保管はセキュリティ上の妥協。アカウント数が増えるなら `Store` をDB（Supabase/SQLite等）実装に差し替える判断。~~
+  → **2026-09-06 決定**: 現状（4事業4アカウント）ではシート運用を継続。**Phase E（第三者運用・販売）到達時**に
+  `Store` を `SupabaseStore` として実装し、`AI Growth : SNS SaaS` の Supabase（全社で唯一のSupabase基盤）へ合流させる。
+  単独でSupabaseプロジェクトは作らない（Free枠は有効プロジェクト2つまでのため集約が前提）。
+  その際も**スプレッドシートは非エンジニアの投稿入力口として残す**（トークンと投稿キューの「正本」だけをDBへ移す二層構成）。
+  判断根拠の全文 → `~/Desktop/claudecode/インフラ方針_Supabase判定_2026-09-06.md`
+  なお「トークンのシート平文保管がセキュリティ上の妥協」である点は**未解決のまま残る**（Phase E まで先送り）。
 - `MAX_POSTS_PER_DAY` の最終値（凍結回避と物量のバランス）。
 - 長時間ブロック障害時に失敗メールが10分毎に来る問題（シートでのalert抑制案あり・docs/CHANGELOG.md §13）。
 
