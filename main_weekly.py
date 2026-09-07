@@ -18,7 +18,7 @@ import os
 import json
 import logging
 import sys
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from functools import partial
 from zoneinfo import ZoneInfo
 
@@ -56,20 +56,36 @@ def read_account_metrics(store, account: str) -> list[dict]:
         logging.getLogger("main_weekly").warning("%s: アカウント指標を読めませんでした", account)
         return []
 
-# ── 3日サイクル（PDCA）設定 ──────────────────────────────────────────────
-# 「3日分の投稿を作成→3日分を分析してレポート」を3日ごとに繰り返す。
-# cron は毎日叩くが、ここで「起点日からの経過日数 % 3 == 0」の日だけ本処理を実行する
-# （day-of-month の */3 は月末→月初で間隔が崩れるため、起点日アンカー方式にする）。
-# 起点 = 2026-06-28（初回サイクル 06-26夕〜06-28 を手動投入した直後。以降 06-28/07-01/07-04…で稼働）。
-# 各サイクルで generator は「翌日から CYCLE_DAYS 日 × 4本」を生成するので、
-#   06-28実行→06-29〜07-01、07-01実行→07-02〜07-04… と隙間なく連続する。
-CYCLE_ANCHOR = date(2026, 6, 28)
-CYCLE_DAYS = 3
-POSTS_PER_DAY = 4
+# ── PDCAサイクル設定（曜日固定・2026-09-06 変更）────────────────────────────
+# 以前は「起点日(2026-06-28)から3日ごと」だったため、サイクル日が毎週ずれ、
+# レポートの届く曜日も定まらなかった。生成は週2回（日・水）、レポートは週1回（日）に固定する。
+# 頻度は実質据え置き（3日周期 ≒ 週2.33回 → 週2回）＝AI呼び出し回数・費用はほぼ変わらない。
+# Python の weekday(): 月=0 火=1 水=2 木=3 金=4 土=5 日=6
+GEN_WEEKDAYS = frozenset({6, 2})   # 日・水
+REPORT_WEEKDAY = 6                 # 日
+POSTS_PER_DAY = 4                  # ★main_monitor.py が import している。名前を変えない
 
 
 def is_cycle_day(today: date) -> bool:
-    return (today - CYCLE_ANCHOR).days % CYCLE_DAYS == 0
+    """生成サイクル日か（週2回・日と水）。"""
+    return today.weekday() in GEN_WEEKDAYS
+
+
+def is_report_day(today: date) -> bool:
+    """レポート日か（週1回・日）。生成日でもレポート日でない日がある（水曜）。"""
+    return today.weekday() == REPORT_WEEKDAY
+
+
+def days_until_next_cycle(today: date) -> int:
+    """次の生成サイクル日までの日数（1〜7）。生成はこの日数ぶんの在庫を作る。
+
+    日曜→水曜=3日（月火水）、水曜→日曜=4日（木金土日）。合計7日で週がちょうど埋まる。
+    サイクル日以外（FORCE_CYCLE=1 での手動実行）でも、次のサイクル日までを埋める本数になる。
+    """
+    for d in range(1, 8):
+        if (today + timedelta(days=d)).weekday() in GEN_WEEKDAYS:
+            return d
+    raise AssertionError("GEN_WEEKDAYS が空です（設定ミス）")
 
 
 def send_account_reports(reports: list[dict], *, user: str, password: str, to: str,
@@ -166,12 +182,12 @@ def main() -> int:
     if not sa_json or not sheets:
         log.error("GOOGLE_SERVICE_ACCOUNT_JSON と (BUSINESSES または SPREADSHEET_ID) が必要です")
         return 1
-    # 3日サイクルゲート: cron は毎日叩くが、起点日から3日ごとの日だけ本処理（分析→レポート→生成→メール）
+    # 曜日ゲート: cron は毎日叩くが、生成サイクル日（日・水）だけ本処理（分析→レポート→生成→メール）
     # を実行する。それ以外の日は即終了（次サイクルまで待機）。FORCE_CYCLE=1 で手動実行時はバイパス。
     today = datetime.now(ZoneInfo(tz_name)).date()
     if os.environ.get("FORCE_CYCLE") != "1" and not is_cycle_day(today):
-        log.info("3日サイクル外（起点=%s / 本日=%s / 周期=%d日）→ 本日は実行しません（次サイクルまで待機）",
-                 CYCLE_ANCHOR, today, CYCLE_DAYS)
+        log.info("サイクル日外（本日=%s / 次回サイクルまで%d日）→ 本日は実行しません（次サイクルまで待機）",
+                 today, days_until_next_cycle(today))
         return 0
     # キルスイッチ: PAUSED=1 なら生成を止める（分析・レポートは無害なので継続）
     if os.environ.get("PAUSED") == "1" and generate:

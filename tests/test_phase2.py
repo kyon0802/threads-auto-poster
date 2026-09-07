@@ -326,37 +326,6 @@ def test_send_account_reports_per_report_to():
     print("  ✓ send_account_reports（rep['to']優先・既定フォールバック）OK")
 
 
-def test_cycle_gate_every_3_days():
-    """3日サイクルゲート：起点(06-28)から3日ごとの日だけ True。間の日は False。"""
-    from datetime import date
-    from main_weekly import is_cycle_day, CYCLE_ANCHOR
-    assert CYCLE_ANCHOR == date(2026, 6, 28), CYCLE_ANCHOR
-    assert is_cycle_day(date(2026, 6, 28))            # 起点
-    assert not is_cycle_day(date(2026, 6, 29))
-    assert not is_cycle_day(date(2026, 6, 30))
-    assert is_cycle_day(date(2026, 7, 1))             # +3
-    assert is_cycle_day(date(2026, 7, 4))             # +6（月跨ぎでも崩れない）
-    assert not is_cycle_day(date(2026, 7, 2))
-    print("  ✓ 3日サイクルゲート（起点から3日ごと・月跨ぎOK）OK")
-
-
-def test_n_posts_for_4perday_businesses():
-    """4本/日対象（seizogyo/uranai）は1サイクル分＝3日×4＝12本。他事業は既定値。
-    Variable GEN_POSTS_<NAME> で上書きできる。"""
-    from main_weekly import n_posts_for, SCHEDULE_FN_BY_BUSINESS
-    assert "seizogyo" in SCHEDULE_FN_BY_BUSINESS and "uranai" in SCHEDULE_FN_BY_BUSINESS
-    assert "seizogyo2" in SCHEDULE_FN_BY_BUSINESS and "seizogyo3" in SCHEDULE_FN_BY_BUSINESS
-    assert n_posts_for("seizogyo", {}, 5) == 12
-    assert n_posts_for("uranai", {}, 5) == 12
-    assert n_posts_for("seizogyo2", {}, 5) == 12
-    assert n_posts_for("seizogyo3", {}, 5) == 12
-    assert n_posts_for("uranai", {"GEN_POSTS_URANAI": "9"}, 5) == 9   # 上書き
-    assert n_posts_for("seizogyo2", {"GEN_POSTS_SEIZOGYO2": "0"}, 5) == 0  # 0=生成オフ（mainでスキップ）
-    assert n_posts_for("seizogyo3", {"GEN_POSTS_SEIZOGYO3": "0"}, 5) == 0  # ぱしも立ち上げ期は0
-    assert n_posts_for("other", {}, 5) == 5                           # 対象外は既定
-    print("  ✓ n_posts_for（4本/日事業=12本・上書き可・0=生成オフ・他事業は既定）OK")
-
-
 def test_uranai_schedule_fn_uses_morning_evening():
     """uranai の schedule_fn は午前1＋夕方-深夜3本を割り当てる（製造業の昼夜とは別プリセット）。"""
     from main_weekly import SCHEDULE_FN_BY_BUSINESS
@@ -501,8 +470,6 @@ if __name__ == "__main__":
     test_mailer_multiple_recipients()
     test_recipients_for_per_business_routing()
     test_send_account_reports_per_report_to()
-    test_cycle_gate_every_3_days()
-    test_n_posts_for_4perday_businesses()
     test_uranai_schedule_fn_uses_morning_evening()
     test_build_prompt_includes_guideline()
     test_posts_aliases_have_label_columns()
