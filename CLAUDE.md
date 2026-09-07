@@ -73,8 +73,9 @@ GitHub Actions（すべて別systemの6本）
 - **投稿スケジュール**: 事業別プリセット（`schedule.PRESETS`）で1日4本・ランダム配置・最低間隔30分。seizogyo=昼1＋夜3／meguri=朝昼夕夜の4窓／seizogyo2=生活リズム4窓（朝通勤・昼休憩・夕帰宅・夜寝る前）／seizogyo3=昼夕寄り4窓（seizogyo2と窓が重ならないことをテストで機械保証＝CIB配慮）。
 - **生成**: `GENERATE_POSTS=1`＋`ANTHROPIC_API_KEY`。`GEN_STATUS`=draft(人が確認)/queued(全自動公開)。**事業別に `GEN_STATUS_<NAME>` で上書き可**（製造業だけdraft等）。生成前に必須タブゲート（§17e）、生成後に機械コンプラゲート。**2026-08-31に seizogyo2/seizogyo3/meguri の `GEN_POSTS_*` を 12 にして全4アカ自動生成ON**（それまでは立ち上げ期の手動運用のため 0＝オフだった）。
 - **メール**: `ENABLE_EMAIL=1` でアカウントごとに週次レポートを個別送信（宛先は Variable `MAIL_TO` / `MAIL_TO_<事業名>`・認証は Gmail アプリパスワード。実アドレスは公開repoに書かない＝§17b）。run失敗時はGitHub純正の失敗通知メールも飛ぶ。
+- **データ蓄積**: インサイト/投稿/アカウント指標/週次レポートは全て**追記・upsert**で、過去データは消えない（2026-09-07実測: takumi インサイト7,958行・161投稿・6月分も健在）。`.clear()` するのは `インサイト分析_<acc>`（派生集計）と `殿堂入り_<acc>`（再計算可能）のみ。
 - **在庫監視**: `monitor.yml`（日次 08:00 JST・読取専用）が各アカの未来在庫と残り日数を算出し、在庫ゼロ/残りわずかのときだけ【要確認】メールを送る。在庫ゼロの間は run を exit 2 で赤くする。**投稿ジョブは在庫ゼロでも成功で終わるため、停止を検知できる唯一の仕組み**（§10・docs/CHANGELOG.md §27）。
-- **テスト**: `python3 -m pytest tests/ -q`（108本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。
+- **テスト**: `python3 -m pytest tests/ -q`（140本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。
 - **過去インシデントの教訓は §10 と docs/CHANGELOG.md（§13/§14/§16/§27）**。特に「row_id 必須・全タブ一意」は絶対。
 
 ---
@@ -118,11 +119,13 @@ threads_poster/
   analyzer.py                 実績集計（純関数・AI不使用）。analyze_windowed=直近7日/前7日/累計、傾向は28日窓
   inventory.py                投稿在庫（ランウェイ）の算出（純関数・週次レポートと在庫監視で共用）
   errors.py                   失敗理由の分類（残高不足/認証/レート/一時障害・純関数）
+  hall_of_fame.py             殿堂入り＝自アカ長期の当たり30本の構築とプロンプト用抽出（純関数）
   reporter.py                 週次レポートのタブ追記＋Markdownミラー（AI不使用）
   generator.py                AI投稿生成（Claude・必須タブゲート＋コンプラゲート・schedule_fn注入）
   strategy.py                 来週方針＋投稿例の生成（レポート用・読み取り専用）
   schedule.py                 1日N本ランダム配置（PRESETS: seizogyo/seizogyo2/seizogyo3/meguri・rng注入）
   compliance.py               機械コンプラゲート（NGワード/URL/文字数・決定的）
+                              ＋重複ゲート find_near_duplicate（既存投稿と類似0.85以上を破棄）
   html_report.py              週次レポートHTML（メール対応・インラインCSS）
   mailer.py                   SMTP(SSL)送信（certifi・smtp_factory注入）
 scripts/                      ローカルで人が実行するセットアップ/移行/運用ツール
@@ -139,7 +142,7 @@ scripts/                      ローカルで人が実行するセットアッ�
   sync_knowledge.py           ローカルナレッジ→ナレッジ_タブ同期
   add_pdca_columns.py         PDCA移行: 投稿タブ3列追加＋お手本DB/仮説ログ作成（冪等・DRY-RUN既定）
   local_run.sh                .env読込→DRY_RUN既定でローカル実行
-tests/                        テスト（API不要・モック・108本）。pytest でも直実行でも可
+tests/                        テスト（API不要・モック・140本）。pytest でも直実行でも可
   test_logic.py / test_collect.py / test_phase2.py / test_schedule.py
   test_report_window.py（期間窓・在庫・エラー分類） / test_monitor.py / test_threads_api_masking.py
 sheet_templates/              accounts.csv / posts.csv / posts_example.csv（記入例）
@@ -180,7 +183,8 @@ requirements.txt / .env.example / README.md / SETUP.md
 - `プロフィール_<acc>`（項目/内容） … 声・トーン・テーマ・お手本・アカ固有NG。**項目「フック型語彙」**（" / " 区切り）があればそのアカウントの型ラベル語彙として enum 強制（無ければ `generator.HOOK_TYPES` の汎用6型）。澪は占い専用6型を登録済み
 - `ガイドライン`（分類/ルール/重大度・事業共通） … 規約/法令/NGワード/過去BAN教訓。「NGワード」分類の行が機械ゲートの禁止語源
 - `ナレッジ_<acc>`（A列チャンク） … 事業ナレッジ全文（あれば最優先の知識源）
-- `お手本DB_<acc>`（お手本ID/出典/本文/フック型/内容型/ポジション近接度/実測数/状態/退役理由/メモ/収集日） … 勝ちパターンDB。自アカ当たり/滑り＋競合の当たり投稿。生成は `状態=active` のみ参照。設計は docs/superpowers/specs/2026-09-01-pdca-closed-loop-design.md
+- `お手本DB_<acc>`（お手本ID/出典/本文/フック型/内容型/ポジション近接度/実測数/状態/退役理由/メモ/収集日） … 勝ちパターンDB。**競合・人が選んだ手本**（スクショ取り込み）。生成は `状態=active` のみ参照。設計は docs/superpowers/specs/2026-09-01-pdca-closed-loop-design.md
+- `殿堂入り_<acc>`（順位/投稿後ID/投稿日時/本文/表示回数/エンゲージ率/フック型/内容型/保護/メモ/更新日） … **自アカの全期間の当たり上位30本**。生成日にシステムが自動更新し、生成では上位10本内をローテーションして3本だけAIに見せる。**`保護` 列に何か入れた行は自動更新で消えない**（人が残したい投稿の置き場）。週次レポートには出さない。設計は docs/superpowers/specs/2026-09-07-hall-of-fame-design.md
 - `仮説ログ`（日付/仮説/検証方法/結果/次アクション） … サイクルごとのPDCA記録（第1段は人が記入・第2段で自動追記）
 
 運用ルール:
