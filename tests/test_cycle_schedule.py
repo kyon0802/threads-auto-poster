@@ -50,9 +50,48 @@ def test_two_cycles_cover_the_week_without_gap_or_overlap():
     print("  ✓ 週の被覆（3日+4日=7日）OK")
 
 
+def test_n_posts_for_is_dynamic_by_weekday():
+    """4本/日事業の生成本数は曜日で変わる（日=3日分12本 / 水=4日分16本）。"""
+    from main_weekly import n_posts_for
+    sunday, wednesday = date(2026, 9, 6), date(2026, 9, 9)
+    assert n_posts_for("seizogyo", {}, 5, sunday) == 12
+    assert n_posts_for("seizogyo", {}, 5, wednesday) == 16
+    assert n_posts_for("seizogyo2", {}, 5, sunday) == 12
+    assert n_posts_for("seizogyo3", {}, 5, wednesday) == 16
+    assert n_posts_for("meguri", {}, 5, wednesday) == 16
+    assert n_posts_for("other", {}, 5, wednesday) == 5   # 4本/日対象外は既定のまま
+    print("  ✓ n_posts_for（曜日で12/16本・対象外は既定）OK")
+
+
+def test_n_posts_for_zero_variable_turns_generation_off():
+    """GEN_POSTS_<NAME>=0 は「その事業だけ生成オフ」として残す（用途を0に限定）。"""
+    from main_weekly import n_posts_for
+    assert n_posts_for("seizogyo2", {"GEN_POSTS_SEIZOGYO2": "0"}, 5, date(2026, 9, 9)) == 0
+    print("  ✓ GEN_POSTS_<NAME>=0（生成オフ）OK")
+
+
+def test_n_posts_for_explicit_override_is_backward_compatible():
+    """1以上の明示指定は後方互換で残す（運用では設定しない）。"""
+    from main_weekly import n_posts_for
+    assert n_posts_for("seizogyo2", {"GEN_POSTS_SEIZOGYO2": "9"}, 5, date(2026, 9, 9)) == 9
+    print("  ✓ GEN_POSTS_<NAME>=9（明示上書き）OK")
+
+
+def test_n_posts_for_empty_variable_falls_back_to_dynamic():
+    """Variable を削除/空にしたら動的計算に戻る（空文字を int() して落ちないこと）。"""
+    from main_weekly import n_posts_for
+    assert n_posts_for("seizogyo2", {"GEN_POSTS_SEIZOGYO2": ""}, 5, date(2026, 9, 6)) == 12
+    assert n_posts_for("seizogyo2", {"GEN_POSTS_SEIZOGYO2": "  "}, 5, date(2026, 9, 9)) == 16
+    print("  ✓ 空のGEN_POSTS_<NAME>は動的計算にフォールバック OK")
+
+
 if __name__ == "__main__":
     test_is_cycle_day_sunday_and_wednesday()
     test_is_report_day_sunday_only()
     test_days_until_next_cycle()
     test_two_cycles_cover_the_week_without_gap_or_overlap()
+    test_n_posts_for_is_dynamic_by_weekday()
+    test_n_posts_for_zero_variable_turns_generation_off()
+    test_n_posts_for_explicit_override_is_backward_compatible()
+    test_n_posts_for_empty_variable_falls_back_to_dynamic()
     print("========== 全テスト PASS ==========")

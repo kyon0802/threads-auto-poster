@@ -140,13 +140,24 @@ SCHEDULE_FN_BY_BUSINESS = {
 }
 
 
-def n_posts_for(name: str, env, default_n: int) -> int:
-    """事業ごとの1アカ生成本数。4本/日スケジュール対象（seizogyo/uranai）は
-    「CYCLE_DAYS 日 × 4本」＝1サイクル分（既定 3日×4＝12本）。Variable GEN_POSTS_<NAME> で上書き可
-    （例 GEN_POSTS_SEIZOGYO / GEN_POSTS_URANAI）。その他事業は GEN_POSTS_PER_ACCOUNT（既定5）。"""
-    if name in SCHEDULE_FN_BY_BUSINESS:
-        return int(env.get(f"GEN_POSTS_{name.upper()}", str(CYCLE_DAYS * POSTS_PER_DAY)))
-    return default_n
+def n_posts_for(name: str, env, default_n: int, today: date) -> int:
+    """事業ごとの1アカ生成本数。
+
+    4本/日スケジュール対象の事業は「次のサイクル日までの日数 × POSTS_PER_DAY」で
+    **自動計算**する（日曜=3日分12本 / 水曜=4日分16本）。曜日で必要日数が変わるため
+    固定値にできない（固定12本のままだと4日区間で毎週1日分＝4本の穴が空く）。
+
+    Variable GEN_POSTS_<NAME> は **0 = その事業だけ生成オフ** に用途を限定する。
+    1以上での本数上書きは後方互換で受け付けるが、運用では設定しない（設定すると穴が空く）。
+    空文字/未設定なら動的計算にフォールバックする。
+    4本/日スケジュール対象外の事業は GEN_POSTS_PER_ACCOUNT（既定5）のまま。
+    """
+    if name not in SCHEDULE_FN_BY_BUSINESS:
+        return default_n
+    raw = str(env.get(f"GEN_POSTS_{name.upper()}", "")).strip()
+    if raw:
+        return int(raw)
+    return days_until_next_cycle(today) * POSTS_PER_DAY
 
 
 def gen_status_for(name: str, env, default_status: str) -> str:
