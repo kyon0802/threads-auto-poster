@@ -167,6 +167,65 @@ def test_decide_gates_force_cycle_forces_both():
     print("  ✓ decide_gates（FORCE_CYCLE=1 で両方強制）OK")
 
 
+def test_main_email_report_diagnostic_is_gated_by_do_report():
+    """水曜（生成日だがレポート日ではない）は仕様上 email_reports が必ず空になる。
+
+    もし「ENABLE_EMAIL=1 だが送信対象のレポートが0件でした（設定を確認）」という
+    診断ログが do_report を条件に含んでいなければ、この分岐は毎週水曜に必ず発火し
+    「設定ミスを疑え」というログが年52回出続ける。その結果、本当に EMAIL_BUSINESSES
+    等が壊れている日曜の同一ログが埋もれてしまう。よってこの診断分岐は
+    「enable_email かつ do_report」を条件に含む形で機械的に固定する。
+    （直前の `if enable_email and email_reports:`＝実際にメールを送る本体は
+    do_report を含まなくてよく、対象外として区別する。）
+    """
+    import ast
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(repo_root, "main_weekly.py")
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read(), filename=path)
+
+    main_func = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            main_func = node
+            break
+    assert main_func is not None, "main_weekly.py に関数 main が見つかりません"
+
+    def contains_name(subtree, name):
+        return any(isinstance(n, ast.Name) and n.id == name for n in ast.walk(subtree))
+
+    def contains_not_of_name(subtree, name):
+        for n in ast.walk(subtree):
+            if isinstance(n, ast.UnaryOp) and isinstance(n.op, ast.Not) and contains_name(n.operand, name):
+                return True
+        return False
+
+    if_nodes = [n for n in ast.walk(main_func) if isinstance(n, ast.If)]
+    assert if_nodes, "main() 内に if 文が見つかりません（見落とし防止）"
+
+    # (1) enable_email と do_report の両方を条件に含む elif（ast.If）が存在すること。
+    gated = [n for n in if_nodes
+             if contains_name(n.test, "enable_email") and contains_name(n.test, "do_report")]
+    assert gated, (
+        "main() 内に enable_email と do_report を両方条件に含む if/elif が見つかりません"
+    )
+
+    # (2) 「enable_email を含み do_report を含まない、email_reports が空であることを
+    #     診断する」旧ログ分岐（`enable_email and not email_reports` 相当）が
+    #     残っていないこと。実送信本体の `if enable_email and email_reports:`
+    #     （not を伴わない）はここでは対象外＝誤検知しない。
+    stale = [n for n in if_nodes
+             if contains_name(n.test, "enable_email")
+             and not contains_name(n.test, "do_report")
+             and contains_not_of_name(n.test, "email_reports")]
+    assert not stale, (
+        "do_report を条件に含まない古い診断分岐（enable_email and not email_reports）が"
+        f"残っています: {[ast.dump(n.test) for n in stale]}"
+    )
+    print("  ✓ メール0件診断ログは do_report を条件に含む（水曜の誤診断ログなし）OK")
+
+
 if __name__ == "__main__":
     test_is_cycle_day_sunday_and_wednesday()
     test_is_report_day_sunday_only()
@@ -180,4 +239,5 @@ if __name__ == "__main__":
     test_weekly_yml_gen_posts_vars_have_no_fallback()
     test_decide_gates_by_weekday()
     test_decide_gates_force_cycle_forces_both()
+    test_main_email_report_diagnostic_is_gated_by_do_report()
     print("========== 全テスト PASS ==========")

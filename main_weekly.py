@@ -356,8 +356,10 @@ def main() -> int:
             # ENABLE_EMAIL=1 なのに認証情報が無い＝設定ミス。静かに緑にせず失敗扱いで気づけるようにする。
             failures += 1
             log.error("ENABLE_EMAIL=1 だが MAIL_USERNAME/MAIL_PASSWORD 未設定のため送信できません（設定を確認）")
-    elif enable_email and not email_reports:
+    elif enable_email and do_report and not email_reports:
         log.info("ENABLE_EMAIL=1 だが送信対象のレポートが0件でした（EMAIL_BUSINESSES/対象アカウントを確認）")
+    elif enable_email and not do_report:
+        log.info("本日は生成日のためレポートメールはありません（レポート=日曜）")
 
     log.info("完了: %s / 失敗=%d / 生成=%s / メール対象=%d件",
              totals, failures, "ON" if generate else "OFF", len(email_reports))
