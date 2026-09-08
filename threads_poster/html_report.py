@@ -444,3 +444,79 @@ def build_html(account: str, analysis: dict, gen_date: str, theme: str = "seizo"
         build_fragment(account, analysis, gen_date, theme, title, strategy, week_label,
                        followers=followers, runway=runway, gen_info=gen_info,
                        strategy_error=strategy_error))
+
+
+def build_vendor_report(rows: list[dict], gen_date: str) -> str:
+    """外注アカウントの週次「作業量」レポート（メール本文用・AI不使用）。
+
+    rows は vendor.summarize_activity() の結果に account / business を足したもの。
+    自社アカ向けの週次レポートが「何が当たったか」を見るのに対し、こちらは
+    **発注者として外注先の仕事量を監督する**ためのもの。したがって最初に出すのは
+    表示数ではなく「何本書いたか（新規本文数）」にする。
+
+    実測（2026-09-08 の外注2アカ分析）で判断材料になったのは次の順序だった:
+      新規本文数 → 使い回し率 → 稼働日数 → 投稿本数 → 表示。
+    """
+    def _card(r: dict) -> str:
+        uniq, posts = r["unique_texts"], r["posts"]
+        # 警告条件: 1本も書いていない / 投稿ゼロ / 使い回しが7割超
+        alerts = []
+        if posts == 0:
+            alerts.append("この期間の投稿が1本もありません")
+        elif uniq == 0:
+            alerts.append("新しく書いた本文が1本もありません（全て使い回し）")
+        elif r["reuse_rate"] >= 70:
+            alerts.append(f'使い回しが{r["reuse_rate"]}%です（新規は{uniq}本のみ）')
+        if r.get("text_missing"):
+            alerts.append(f'本文を取得できなかった投稿が{r["text_missing"]}本あります'
+                          f'（使い回し率の分母から除外済み）')
+        color = CRIT if (posts == 0 or uniq == 0) else (WARN if r["reuse_rate"] >= 70 else OK)
+
+        head = (f'<div style="font-size:16px;font-weight:800;color:{INK};">'
+                f'<span style="color:{color};">●</span> {_esc(r["account"])}'
+                f'<span style="font-size:11.5px;font-weight:500;color:{SUB};margin-left:8px;">'
+                f'{_esc(r.get("business", ""))}・直近{r["days"]}日</span></div>')
+
+        stats = [("新しく書いた本文", f'{uniq}本', True),
+                 ("使い回し率", f'{r["reuse_rate"]}%', r["reuse_rate"] >= 70),
+                 ("投稿本数", f'{posts}本', False),
+                 ("稼働日", f'{r["active_days"]}日', False),
+                 ("無投稿日", f'{r["idle_days"]}日', r["idle_days"] >= 3),
+                 ("表示 合計 / 中央値", f'{r["views_total"]:,} / {r["views_median"]}', False),
+                 ("表示5以下", f'{r["low_views"]}本', False)]
+        cells = ""
+        for label, value, emph in stats:
+            vc = CRIT if emph else INK
+            cells += (f'<tr><td style="padding:6px 10px;border-bottom:1px solid {LINE};'
+                      f'font-size:12.5px;color:{SUB};">{label}</td>'
+                      f'<td align="right" style="padding:6px 10px;border-bottom:1px solid {LINE};'
+                      f'font-size:13px;font-weight:700;color:{vc};">{value}</td></tr>')
+
+        alert_html = ""
+        for a in alerts:
+            alert_html += (f'<div style="margin-top:8px;padding:8px 10px;border-left:4px solid {CRIT};'
+                           f'background:#fff5f5;font-size:12.5px;color:{INK};">'
+                           f'<b>要確認</b>：{_esc(a)}</div>')
+
+        # 投稿の多い時間帯（上位3つ）。「反応の良い時間に置けているか」を見るため。
+        top_hours = sorted(range(24), key=lambda h: -r["by_hour"][h])[:3]
+        top_hours = [h for h in top_hours if r["by_hour"][h] > 0]
+        hours_html = ""
+        if top_hours:
+            hours_html = (f'<div style="margin-top:8px;font-size:12px;color:{SUB};">'
+                          f'投稿の多い時間帯：'
+                          + "・".join(f'{h}時({r["by_hour"][h]}本)' for h in top_hours) + '</div>')
+
+        return (f'<div style="background:{PANEL};border:1px solid {LINE};border-left:5px solid {color};'
+                f'border-radius:12px;padding:14px 16px;margin:12px 0;">{head}'
+                f'<table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">{cells}</table>'
+                f'{hours_html}{alert_html}</div>')
+
+    lead = ('外注先が運用するアカウントの<b>作業量</b>のまとめです。'
+            '「投稿本数」ではなく「新しく書いた本文の数」が実際の制作量です。')
+    body = (f'<div style="font-size:13px;color:{INK};line-height:1.8;margin-bottom:4px;">{lead}</div>'
+            + "".join(_card(r) for r in rows)
+            + f'<div style="font-size:11.5px;color:{SUB};margin-top:10px;">'
+              f'集計 {_esc(gen_date)}／出典：インサイトタブ（日次収集）。'
+              f'使い回し＝空白を除いて本文が完全一致する2回目以降の投稿。</div>')
+    return wrap_document("外注アカウント 作業量レポート", body)

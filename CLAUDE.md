@@ -63,12 +63,17 @@ GitHub Actions（すべて別systemの6本）
 ## 2. 現在の運用状態（2026-08-31時点）
 
 - **repo**: `kyon0802/threads-auto-poster`（**公開**・§17厳守）。gh CLI は `/opt/homebrew/bin/gh`（アカウント kyon0802）。
-- **稼働事業（Secret `BUSINESSES`）**: 4事業4アカウント（全て自動生成ON・2026-08-31〜）。
+- **稼働事業（Secret `BUSINESSES`）**: 4事業4アカウント（全て自動生成ON・2026-08-31〜）＋**外注2アカウント（収集・管理のみ・2026-09-08〜）**。
   - `seizogyo`（製造業・`takumi_kojo_navi`）
   - `seizogyo2`（製造業・共感認知型 `tenshokuman`＝住田）
   - `seizogyo3`（製造業・本音暴露型 `pashi`＝ぱし。2026-07-08にseizogyo2から分離＝**アカウント別シート**）
 - **廃止**: `uranai`（占い「結」・`miko_yui_musubi`）は 2026-07-28 に**廃止**。156投稿で累計227表示（平均1.5）とアカウント側の配信抑制が疑われたため、人格・アカウント名ごと終了。ナレッジのみローカルへ保全（占いThreads-note事業/結_アーカイブ_20260728）。**新しい占いアカウントは未定**。
   - `meguri`（占い「澪」・アカウントキー `mio__meguri`＝**アンダースコア2つ**）。2026-07-28に BUSINESSES へ追加して稼働開始し、ローンチ26本（07-29〜08-10）を公開済み。2026-08-31に自動生成もON。
+- **★外注アカウント（2026-09-08〜・seizogyo シートに相乗り）**: 外注先が運用する2アカを
+  **データ収集と外注管理のためだけ**に載せている。`accounts` タブの「運用種別」＝`外注`。
+  **投稿しない／AI生成しない／在庫監視の対象外**（＝これらを機械で禁止済み・`tests/test_vendor_accounts.py`）。
+  収集とトークン更新だけ自社アカと同じ扱い。週次で「外注作業量レポート」を2アカ1通で送る。
+  設計＝docs/superpowers/specs/2026-09-08-vendor-accounts-design.md。
 - **3日PDCAサイクル**: weekly.yml は毎日叩くが `is_cycle_day`（起点 2026-06-28・3日周期）の日だけ本処理。各サイクルで「翌日から3日×4本/日」を生成→隙間なく連続。手動実行は `FORCE_CYCLE=1`。
 - **投稿スケジュール**: 事業別プリセット（`schedule.PRESETS`）で1日4本・ランダム配置・最低間隔30分。seizogyo=昼1＋夜3／meguri=朝昼夕夜の4窓／seizogyo2=生活リズム4窓（朝通勤・昼休憩・夕帰宅・夜寝る前）／seizogyo3=昼夕寄り4窓（seizogyo2と窓が重ならないことをテストで機械保証＝CIB配慮）。
 - **生成**: `GENERATE_POSTS=1`＋`ANTHROPIC_API_KEY`。`GEN_STATUS`=draft(人が確認)/queued(全自動公開)。**事業別に `GEN_STATUS_<NAME>` で上書き可**（製造業だけdraft等）。生成前に必須タブゲート（§17e）、生成後に機械コンプラゲート。**2026-08-31に seizogyo2/seizogyo3/meguri の `GEN_POSTS_*` を 12 にして全4アカ自動生成ON**（それまでは立ち上げ期の手動運用のため 0＝オフだった）。
@@ -118,6 +123,9 @@ threads_poster/
   collector.py                インサイト日次収集（Publisher対称・読み取り専用）
   analyzer.py                 実績集計（純関数・AI不使用）。analyze_windowed=直近7日/前7日/累計、傾向は28日窓
   inventory.py                投稿在庫（ランウェイ）の算出（純関数・週次レポートと在庫監視で共用）
+                              monitored_accounts()＝外注アカを在庫監視から除外
+  vendor.py                   外注アカの作業量指標（純関数・AI不使用）。新規本文数/使い回し率/
+                              稼働日/時間帯。analyzer.py（自社の勝ちパターン）とは目的が違うので分離
   errors.py                   失敗理由の分類（残高不足/認証/レート/一時障害・純関数）
   hall_of_fame.py             殿堂入り＝自アカ長期の当たり30本の構築とプロンプト用抽出（純関数）
   reporter.py                 週次レポートのタブ追記＋Markdownミラー（AI不使用）
@@ -141,10 +149,12 @@ scripts/                      ローカルで人が実行するセットアッ�
   batch_to_csv.py             content→sheetブリッジ（立ち上げバッチMd→posts CSV）
   sync_knowledge.py           ローカルナレッジ→ナレッジ_タブ同期
   add_pdca_columns.py         PDCA移行: 投稿タブ3列追加＋お手本DB/仮説ログ作成（冪等・DRY-RUN既定）
+  add_vendor_columns.py       外注対応: accounts に「運用種別」・インサイトに「本文」を追加（冪等・DRY-RUN既定）
   local_run.sh                .env読込→DRY_RUN既定でローカル実行
 tests/                        テスト（API不要・モック・140本）。pytest でも直実行でも可
   test_logic.py / test_collect.py / test_phase2.py / test_schedule.py
   test_report_window.py（期間窓・在庫・エラー分類） / test_monitor.py / test_threads_api_masking.py
+  test_vendor_accounts.py（外注アカ: 投稿しない/生成しない/在庫監視しない/収集はする）
 sheet_templates/              accounts.csv / posts.csv / posts_example.csv（記入例）
 .claude/agents/               このrepo専用のサブエージェント定義10体（orchestrator が回し役。
                               api-specialist / system-architect / devops / insights-engineer /
@@ -168,13 +178,18 @@ requirements.txt / .env.example / README.md / SETUP.md
 > 真実は `threads_poster/sheets.py`（`*_FIELD_ALIASES` / `per_account_post_headers` / タブ定数）。見出しは**日本語(正規)でも英語(旧名)でも読める**（エイリアス層）。タブ名は変えない。見出し行も消さない。
 
 **`accounts` タブ**:
-`アカウント`(account) / `ユーザーID`(user_id) / `アクセストークン`(access_token) / `トークン更新日時`(token_updated_at) / `本日投稿数`(daily_count) / `カウント日付`(daily_count_date)
+`アカウント`(account) / `ユーザーID`(user_id) / `アクセストークン`(access_token) / `トークン更新日時`(token_updated_at) / `本日投稿数`(daily_count) / `カウント日付`(daily_count_date) / `運用種別`(role)
+
+- **`運用種別`**: 空 or `自社` ＝ 自社運用（従来どおり投稿・生成・在庫監視の対象）。`外注` ＝ 外注アカ
+  （**投稿も生成もせず、収集と管理のみ**）。未知の値は自社扱い（打ち間違いで投稿が全停止しないため）。
+  外注アカには投稿タブ `投稿_<acc>` を作らない。列の追加は `scripts/add_vendor_columns.py`。
 
 **投稿タブ = アカウントごとに分割**。タブ名 **`投稿_<アカウント名>`**（`<アカウント名>`は accounts の `アカウント` と一致。**アカウントはタブ名から自動判定するので「アカウント」列は持たない**）。見出し:
 `投稿ID`(row_id) / `投稿日時`(post_datetime, JST `YYYY-MM-DD HH:MM`・文字列書式) / `本文`(text) / `メディア種類`(media_type, TEXT/IMAGE/VIDEO/CAROUSEL) / `メディアURL`(media_url) / `返信先ID`(reply_to=親の投稿ID) / `返信できる人`(reply_control) / `状態`(status) / `投稿後ID`(posted_id) / `投稿実施日時`(posted_at) / `エラー`(error) / `フック型`(hook_type) / `内容型`(content_type) / `参照お手本ID`(exemplar_ref)
 
 **システムが自動生成/管理するタブ**:
-- `インサイト_<acc>` … 投稿別インサイトの日次スナップショット（posted_id×取得日で冪等）
+- `インサイト_<acc>` … 投稿別インサイトの日次スナップショット（posted_id×取得日で冪等）。
+  **`本文` 列あり**（2026-09-08 追加）＝外注の使い回し率の算出に必要。APIは元から本文を返しており呼び出しは増えない
 - `アカウント指標_<acc>` … フォロワー数等の日次スナップショット
 - `インサイト分析_<acc>` … analyzer の週次集計（毎回全置換）
 - `週次レポート` … reporter の追記

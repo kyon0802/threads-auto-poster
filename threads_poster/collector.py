@@ -134,6 +134,7 @@ class Collector:
                     "permalink": m.get("permalink", ""),
                     "post_datetime": ts.strftime("%Y-%m-%d %H:%M") if ts else (m.get("timestamp") or ""),
                     "media_type": m.get("media_type", ""),
+                    "text": m.get("text") or "",
                     "text_len": len(m.get("text") or ""),
                     "is_tree": "ツリー" if str(p.get("reply_to") or "").strip() else "",
                     "views": ins.get("views", ""),

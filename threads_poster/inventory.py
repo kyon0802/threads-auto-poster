@@ -109,3 +109,15 @@ def summarize(posts: list[dict], accounts: list[str], *, now: datetime,
         r["severity"] = runway_severity(r)
         r["message"] = runway_message(r)
     return sorted(out, key=lambda r: (order[r["severity"]], r["days_left"]))
+
+
+def monitored_accounts(account_rows: list[dict]) -> list[str]:
+    """在庫監視の対象アカウント名を返す（外注アカは除外）。
+
+    外注アカ（運用種別=外注）はこちらが投稿しないので在庫は常にゼロになる。
+    監視に含めると毎日 critical のまま Actions が赤く固定され、
+    「本物の停止（自社アカの生成が止まった）」を見分けられなくなる＝監視が壊れる。
+    """
+    from .sheets import is_outsourced
+    return [str(a["account"]) for a in account_rows
+            if a.get("account") and not is_outsourced(a)]

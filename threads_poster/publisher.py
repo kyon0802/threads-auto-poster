@@ -16,7 +16,7 @@ from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 from .threads_api import ThreadsClient, ThreadsAPIError
-from .sheets import Store
+from .sheets import Store, is_outsourced
 
 logger = logging.getLogger("publisher")
 
@@ -178,6 +178,15 @@ class Publisher:
             if not acc:
                 self._mark_error(row_id, f"未登録アカウント: {account}", account=account)
                 results["error"] += 1
+                continue
+
+            # 外注アカウント（運用種別=外注）には絶対に投稿しない。
+            # 外注先が運用しているアカウントなので、こちらから投稿するのは重大事故になる。
+            # 行を error にはしない（毎回の失敗メールで通知が麻痺するため）。素通りさせて
+            # 「なぜ出ないのか」が分かるよう警告ログだけ残す。
+            if is_outsourced(acc):
+                logger.warning("%s は外注アカウントのため公開しません（row=%s）", account, row_id)
+                results["skipped"] += 1
                 continue
 
             # レート制限
