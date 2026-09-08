@@ -476,3 +476,86 @@ def test_report_marks_median_as_primary():
     assert "402" in html, "平均が併記されていない"
     assert "主" in html or "実態" in html, "どちらを見るべきかの手がかりが無い"
     print("  ✓ レポートで中央値が主指標と分かる OK")
+
+
+# ---------------------------------------------------------------------------
+# トークン取得スクリプト: 外注アカには投稿権限を付けない
+#
+# 2026-09-06 横断分析設計の「やらないこと」より:
+#   「分析専用アカウントへの自動投稿（トークンに投稿権限を付与しない）」
+# コード側で投稿を止めているだけでなく、**トークンそのものに投稿権限を持たせない**ことで
+# 二重に守る（万一コードの分岐をすり抜けても、APIが投稿を拒否する）。
+# ---------------------------------------------------------------------------
+import importlib.util  # noqa: E402
+
+
+def _load_script(name):
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "scripts", f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_auth_scope_for_outsourced_has_no_publish_permission():
+    """外注アカ用のスコープに threads_content_publish を含めない。"""
+    gau = _load_script("get_auth_url")
+    scope = gau.build_scope(collect_only=True)
+    assert "threads_content_publish" not in scope, \
+        "外注アカのトークンに投稿権限が付いている（設計の『やらないこと』違反）"
+    assert "threads_basic" in scope and "threads_manage_insights" in scope, \
+        "収集に必要な権限が欠けている"
+    print("  ✓ 外注アカ用スコープは収集のみ（投稿権限なし）OK")
+
+
+def test_auth_scope_for_own_account_keeps_publish_permission():
+    """自社アカは従来どおり投稿権限を含む（既存の取得手順を壊さない）。
+
+    §19 の教訓: 過去に投稿スコープだけで取得し、収集開始時に取り直す羽目になった。
+    自社アカは投稿と収集の両方が必要。
+    """
+    gau = _load_script("get_auth_url")
+    scope = gau.build_scope(collect_only=False)
+    for s in ("threads_basic", "threads_content_publish", "threads_manage_insights"):
+        assert s in scope, f"{s} が欠けている"
+    print("  ✓ 自社アカ用スコープは従来どおり OK")
+
+
+# ---------------------------------------------------------------------------
+# 登録スクリプト: 外注アカにテスト投稿を作らせない
+# ---------------------------------------------------------------------------
+
+def test_setup_account_refuses_test_post_for_outsourced():
+    """外注アカに --add-test-post を付けたら実行前に止める。
+
+    テスト投稿は「投稿_<acc>」タブに行を作る。外注アカは投稿タブを作らない運用なので、
+    ここで作ってしまうと運用ルールが崩れる（publisher は止めるが、シートに不要な行が残る）。
+    人の操作ミスをスクリプト側で拒否する。
+    """
+    sa = _load_script("setup_account")
+    ok, reason = sa.validate_options(role="外注", add_test_post=True)
+    assert ok is False
+    assert "外注" in reason and "テスト投稿" in reason, f"理由が不親切: {reason}"
+    print("  ✓ 外注アカへのテスト投稿を拒否 OK")
+
+
+def test_setup_account_allows_test_post_for_own():
+    """自社アカは従来どおりテスト投稿を作れる（既存手順を壊さない）。"""
+    sa = _load_script("setup_account")
+    assert sa.validate_options(role="", add_test_post=True)[0] is True
+    assert sa.validate_options(role="自社", add_test_post=True)[0] is True
+    print("  ✓ 自社アカのテスト投稿は従来どおり OK")
+
+
+def test_setup_account_rejects_unknown_role():
+    """運用種別の打ち間違いを登録時に弾く。
+
+    is_outsourced() は未知の値を自社扱いにする（投稿が全停止しない方に倒す）ため、
+    「外注のつもりで打ち間違えた」場合は自社扱いになってしまう。登録の入口で止める。
+    """
+    sa = _load_script("setup_account")
+    ok, reason = sa.validate_options(role="がいちゅう", add_test_post=False)
+    assert ok is False
+    assert "運用種別" in reason
+    print("  ✓ 運用種別の打ち間違いを登録時に弾く OK")

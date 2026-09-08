@@ -1,6 +1,6 @@
 # 外注アカウント対応（収集・外注管理のみ）設計 — 2026-09-08
 
-- 状態: **実装済み**（`tests/test_vendor_accounts.py` 30本・全体168本パス）
+- 状態: **実装済み**（`tests/test_vendor_accounts.py` 35本・全体173本パス）
 - 関連: **[2026-09-06-cross-account-analytics-design.md](2026-09-06-cross-account-analytics-design.md)**
 
 ## 先行設計との関係（2026-09-09 追記・重要）
@@ -98,11 +98,13 @@ threads_poster/publisher.py    外注アカは公開しない（トークン更�
 threads_poster/collector.py    本文を保存
 threads_poster/inventory.py    monitored_accounts()（外注を在庫監視から除外）
 threads_poster/vendor.py       新規・外注管理指標（純関数）
+scripts/get_auth_url.py        --collect-only（投稿権限なしのトークンを取る）
+scripts/setup_account.py       --role / --sheet-id、打ち間違いとテスト投稿を拒否
 threads_poster/html_report.py  build_vendor_report()
 main_weekly.py                 外注は分析/生成をスキップ・外注レポートを1通送る
 main_monitor.py                monitored_accounts() を使う
 scripts/add_vendor_columns.py  新規・既存シートへの列追加（冪等・DRY-RUN既定）
-tests/test_vendor_accounts.py  新規30本
+tests/test_vendor_accounts.py  新規35本
 ```
 
 ## 人がやること（コードでは代われない）
@@ -112,10 +114,29 @@ API連携まで到達していた形跡がある（取得した1ヶ月分のCSV�
 ただし **そのトークンがシステムの読むシートに登録されていない**ため、現状システムからは見えない。
 まず「9/7に取得した長期トークンが手元に残っているか」を確認すること。
 
-1. トークンが**残っていれば** 手順2へ。**残っていなければ** 再取得する
-   （外注先に Threadsテスター追加 → 認可 → `scripts/get_auth_url.py` → `scripts/exchange_token.py`）
-2. `python3 scripts/add_vendor_columns.py --sheet-id <seizogyoのID> --apply` で列を追加
-3. `accounts` タブに2行追加（**運用種別＝外注**・投稿タブ `投稿_<acc>` は作らない）
+1. 外注先に **Threadsテスター追加 → 承認**をしてもらう（アカウント所有者しかできない）
+2. 列を追加：`python3 scripts/add_vendor_columns.py --sheet-id <seizogyoのID> --apply`
+3. 認可URLを出す：`python3 scripts/get_auth_url.py --collect-only`
+   → **`--collect-only` で投稿権限を要求しない**（下記）。対象アカでログインした状態で承認
+4. 長期トークンへ交換：`python3 scripts/exchange_token.py --code <認可コード> --out <保存先>`
+5. 登録：`python3 scripts/setup_account.py --token-file <保存先> --account <アカウント名>
+   --role 外注 --sheet-id <seizogyoのID>`（**`--add-test-post` は付けない＝スクリプトが拒否する**）
+
+### トークン自体に投稿権限を付けない（二重の防御）
+
+先行設計の「やらないこと」に **分析専用アカウントへの自動投稿（トークンに投稿権限を付与しない）** とある。
+コード側（publisher）でも投稿を止めているが、`--collect-only` で
+`threads_content_publish` を要求しないことで、**万一コードの分岐をすり抜けても API 側が投稿を拒否する**。
+
+| | 自社アカ | 外注アカ（`--collect-only`） |
+|---|---|---|
+| threads_basic | ○ | ○ |
+| threads_manage_insights | ○ | ○ |
+| **threads_content_publish** | ○ | **×** |
+
+`setup_account.py` は運用種別の打ち間違い（例「がいちゅう」）と、外注アカへの
+`--add-test-post` を**登録の入口で拒否**する。前者は `is_outsourced()` が未知値を自社扱いに
+倒す設計のため、入口で止めないと「外注のつもりが自社で登録」される。
 
 ## やらなかったこと（先行設計に残課題として記載済み）
 
