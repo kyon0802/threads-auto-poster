@@ -1,6 +1,6 @@
 # 外注アカウント対応（収集・外注管理のみ）設計 — 2026-09-08
 
-- 状態: **実装済み**（`tests/test_vendor_accounts.py` 35本・全体173本パス）
+- 状態: **実装済み**（`tests/test_vendor_accounts.py` 37本・全体175本パス）
 - 関連: **[2026-09-06-cross-account-analytics-design.md](2026-09-06-cross-account-analytics-design.md)**
 
 ## 先行設計との関係（2026-09-09 追記・重要）
@@ -100,11 +100,12 @@ threads_poster/inventory.py    monitored_accounts()（外注を在庫監視か�
 threads_poster/vendor.py       新規・外注管理指標（純関数）
 scripts/get_auth_url.py        --collect-only（投稿権限なしのトークンを取る）
 scripts/setup_account.py       --role / --sheet-id、打ち間違いとテスト投稿を拒否
+scripts/exchange_token.py      --out（トークンを画面に出さず0600ファイルへ保存）
 threads_poster/html_report.py  build_vendor_report()
 main_weekly.py                 外注は分析/生成をスキップ・外注レポートを1通送る
 main_monitor.py                monitored_accounts() を使う
 scripts/add_vendor_columns.py  新規・既存シートへの列追加（冪等・DRY-RUN既定）
-tests/test_vendor_accounts.py  新規35本
+tests/test_vendor_accounts.py  新規37本
 ```
 
 ## 人がやること（コードでは代われない）
@@ -118,7 +119,8 @@ API連携まで到達していた形跡がある（取得した1ヶ月分のCSV�
 2. 列を追加：`python3 scripts/add_vendor_columns.py --sheet-id <seizogyoのID> --apply`
 3. 認可URLを出す：`python3 scripts/get_auth_url.py --collect-only`
    → **`--collect-only` で投稿権限を要求しない**（下記）。対象アカでログインした状態で承認
-4. 長期トークンへ交換：`python3 scripts/exchange_token.py --code <認可コード> --out <保存先>`
+4. 長期トークンへ交換：`python3 scripts/exchange_token.py <認可コード> --out ~/.config/threads-poster/vendor_a.tmp`
+   → `--out` 指定でトークンを**画面に出さず**0600のファイルへ保存する
 5. 登録：`python3 scripts/setup_account.py --token-file <保存先> --account <アカウント名>
    --role 外注 --sheet-id <seizogyoのID>`（**`--add-test-post` は付けない＝スクリプトが拒否する**）
 

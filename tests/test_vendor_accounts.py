@@ -559,3 +559,38 @@ def test_setup_account_rejects_unknown_role():
     assert ok is False
     assert "運用種別" in reason
     print("  ✓ 運用種別の打ち間違いを登録時に弾く OK")
+
+
+# ---------------------------------------------------------------------------
+# トークンの受け渡し: 画面に出さずファイルへ（権限も絞る）
+# ---------------------------------------------------------------------------
+import stat  # noqa: E402
+import tempfile  # noqa: E402
+
+
+def test_saved_token_file_is_not_readable_by_others():
+    """トークンファイルは本人だけが読める権限(0600)で作る。
+
+    アクセストークンは投稿・収集の権限をそのまま持つ資格情報。既定の権限(0644)だと
+    同じマシンの他ユーザーから読める。CLAUDE.md §17b の「秘密は Secrets と非公開シートのみ」
+    の趣旨に合わせ、一時ファイルでも他人に読めない状態にする。
+    """
+    ex = _load_script("exchange_token")
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "token.tmp")
+        ex.save_token(path, "TEST_TOKEN_VALUE")
+        assert open(path).read() == "TEST_TOKEN_VALUE"
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        assert mode == 0o600, f"権限が緩い: {oct(mode)}（他ユーザーに読める）"
+    print("  ✓ トークンファイルは0600で保存 OK")
+
+
+def test_saved_token_has_no_trailing_newline():
+    """余計な改行を付けない。setup_account.py は strip するが、
+    人が手で cat して別の場所へ貼るときに壊れないよう保存側で揃える。"""
+    ex = _load_script("exchange_token")
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "t")
+        ex.save_token(path, "  ABC\n")
+        assert open(path).read() == "ABC"
+    print("  ✓ 前後の空白/改行を落として保存 OK")
