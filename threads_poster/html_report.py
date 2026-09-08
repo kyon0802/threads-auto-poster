@@ -482,7 +482,10 @@ def build_vendor_report(rows: list[dict], gen_date: str) -> str:
                  ("投稿本数", f'{posts}本', False),
                  ("稼働日", f'{r["active_days"]}日', False),
                  ("無投稿日", f'{r["idle_days"]}日', r["idle_days"] >= 3),
-                 ("表示 合計 / 中央値", f'{r["views_total"]:,} / {r["views_median"]}', False),
+                 # 中央値が実態。平均は突出した1本に押し上げられるので併記して乖離を見せる
+                 # （平均だけで判断すると外注先への指示が逆になる＝2026-09-06設計の必須要件）。
+                 ("表示 中央値（実態）", f'{r["views_median"]}', False),
+                 ("表示 平均 / 合計", f'{r.get("views_mean", 0):,} / {r["views_total"]:,}', False),
                  ("表示5以下", f'{r["low_views"]}本', False)]
         cells = ""
         for label, value, emph in stats:
@@ -513,7 +516,9 @@ def build_vendor_report(rows: list[dict], gen_date: str) -> str:
                 f'{hours_html}{alert_html}</div>')
 
     lead = ('外注先が運用するアカウントの<b>作業量</b>のまとめです。'
-            '「投稿本数」ではなく「新しく書いた本文の数」が実際の制作量です。')
+            '「投稿本数」ではなく「新しく書いた本文の数」が実際の制作量です。<br>'
+            '表示数は<b>中央値</b>を見てください。1本の当たりが平均を押し上げ、'
+            '平均だけで見ると評価が逆転します。')
     body = (f'<div style="font-size:13px;color:{INK};line-height:1.8;margin-bottom:4px;">{lead}</div>'
             + "".join(_card(r) for r in rows)
             + f'<div style="font-size:11.5px;color:{SUB};margin-top:10px;">'

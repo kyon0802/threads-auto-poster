@@ -447,3 +447,32 @@ def test_vendor_activity_rows_empty_when_no_outsourced():
     assert vendor_activity_rows(MemoryStore(accounts, [], insights=[]),
                                 accounts, business="meguri", today=NOW.date()) == []
     print("  ✓ 外注アカが無ければ空 OK")
+
+
+# ---------------------------------------------------------------------------
+# 中央値を主指標にする（2026-09-06 横断分析設計の必須要件を取り込み）
+#
+# 「連携直後に委託先アカウントの1ヶ月分を実測したところ、平均表示と中央値表示で評価が
+#  逆転するケースが実際に出た。1本の突出した投稿が平均を押し上げ、残り半数が表示ひと桁」
+# → 平均だけで判断すると外注先への指示が逆になるため、中央値を主・平均を併記する。
+# ---------------------------------------------------------------------------
+
+def test_mean_and_median_are_both_reported():
+    """平均と中央値の両方を出す。乖離そのものが判断材料になるため。"""
+    rows = [_ins(str(i), "2026-09-06 10:00", f"本文{i}", views=v)
+            for i, v in enumerate([1, 2, 3, 4, 2000], start=1)]
+    s = summarize_activity(rows, days=7, today=NOW.date())
+    assert s["views_median"] == 3, "中央値が実態（ほとんど伸びていない）を表していない"
+    assert s["views_mean"] == 402, "平均が併記されていない"
+    print("  ✓ 中央値と平均を併記（乖離が見える）OK")
+
+
+def test_report_marks_median_as_primary():
+    """レポート上で中央値が主指標だと分かるようにする（平均だけ見て誤判断させない）。"""
+    html = build_vendor_report(
+        [_vendor_row("v1", views_median=3, views_mean=402, views_total=2010)],
+        "2026-09-08 06:00")
+    assert "中央値" in html
+    assert "402" in html, "平均が併記されていない"
+    assert "主" in html or "実態" in html, "どちらを見るべきかの手がかりが無い"
+    print("  ✓ レポートで中央値が主指標と分かる OK")

@@ -9,13 +9,14 @@
   - 投稿本数 / 稼働日数 … 契約どおりの本数が出ているか
   - ユニーク本文数 / 使い回し率 … **実際に何本書いたか**（見かけの本数と制作量は違う）
   - 時間帯分布 … 反応の良い時間に置けているか
-  - 表示の合計/中央値 … 成果側の最低限
+  - 表示の中央値 … 成果側の最低限。**中央値が主指標**で平均は併記のみ
+    （2026-09-06 横断分析設計の必須要件。実測で平均と中央値の評価が逆転し、
+     平均だけで判断すると外注先への指示が逆になったため）
 本文の照合は「空白を除いた完全一致」。表記ゆれまで拾う類似判定は誤検知が怖いので採らない。
 """
 from __future__ import annotations
 
 import re
-from collections import Counter
 from datetime import date, datetime
 
 _FORMATS = ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d")
@@ -73,7 +74,7 @@ def summarize_activity(rows: list[dict], *, days: int = 7, today: date | None = 
 
     返り値の主なキー:
       posts / active_days / unique_texts / reused / reuse_rate(%) / text_missing
-      by_hour(24要素) / views_total / views_median / low_views(表示5以下の本数)
+      by_hour(24要素) / views_total / views_median(主) / views_mean(補助) / low_views(表示5以下の本数)
     """
     today = today or date.today()
     posts = latest_per_post(rows)
@@ -118,7 +119,11 @@ def summarize_activity(rows: list[dict], *, days: int = 7, today: date | None = 
         "text_missing": text_missing,
         "by_hour": by_hour,
         "views_total": sum(views),
+        # 中央値が主指標。平均は「乖離を見せるための補助」として併記する
+        # （2026-09-06 横断分析設計の必須要件。実測で平均と中央値の評価が逆転したため。
+        #  1本の突出した投稿が平均を押し上げ、残り半数は表示ひと桁という分布だった）。
         "views_median": sv[len(sv) // 2] if sv else 0,
+        "views_mean": round(sum(views) / len(views)) if views else 0,
         "low_views": sum(1 for v in views if v <= 5),
         "days": days,
     }
