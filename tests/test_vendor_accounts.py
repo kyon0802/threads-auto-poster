@@ -594,3 +594,80 @@ def test_saved_token_has_no_trailing_newline():
         ex.save_token(path, "  ABC\n")
         assert open(path).read() == "ABC"
     print("  ✓ 前後の空白/改行を落として保存 OK")
+
+
+# ---------------------------------------------------------------------------
+# 登録済みアカウントの棚卸し（トークンが生きているかを人が確認するため）
+#
+# 「前回発行したトークンがまだ使えるか」「そもそもどのシートに登録済みか」を
+# 確かめる手段が無く、再発行するしかない状態だった。長期トークンは60日有効なので、
+# 生きていれば認可からやり直す必要はない。
+# ---------------------------------------------------------------------------
+from threads_poster.accounts_status import summarize_accounts  # noqa: E402
+
+
+def test_reports_token_age_and_days_left():
+    """トークン更新日時から経過日数と残り日数を出す（長期トークンは60日）。"""
+    rows = [{"account": "a1", "access_token": "tok", "user_id": "1",
+             "token_updated_at": "2026-09-07 10:00:00"}]
+    s = summarize_accounts(rows, now=datetime(2026, 9, 11, 10, 0))[0]
+    assert s["age_days"] == 4
+    assert s["days_left"] == 56
+    assert s["status"] == "ok"
+    print("  ✓ 経過日数と残り日数を算出 OK")
+
+
+def test_flags_token_close_to_expiry():
+    """失効が近いトークンを警告する（残り7日以下）。"""
+    s = summarize_accounts(
+        [{"account": "a1", "access_token": "tok", "user_id": "1",
+          "token_updated_at": "2026-07-20 10:00:00"}],
+        now=datetime(2026, 9, 11, 10, 0))[0]
+    assert s["status"] == "warn", f"残り{s['days_left']}日なのに警告されていない"
+    print("  ✓ 失効間近を警告 OK")
+
+
+def test_flags_expired_token():
+    """60日を過ぎたトークンは expired。再取得が必要だと分かるようにする。"""
+    s = summarize_accounts(
+        [{"account": "a1", "access_token": "tok", "user_id": "1",
+          "token_updated_at": "2026-06-01 10:00:00"}],
+        now=datetime(2026, 9, 11, 10, 0))[0]
+    assert s["status"] == "expired"
+    assert s["days_left"] <= 0
+    print("  ✓ 失効済みを検出 OK")
+
+
+def test_flags_missing_token():
+    """トークンが空の行は missing（登録漏れ）。"""
+    s = summarize_accounts([{"account": "a1", "access_token": "", "user_id": ""}],
+                           now=datetime(2026, 9, 11, 10, 0))[0]
+    assert s["status"] == "missing"
+    print("  ✓ 登録漏れを検出 OK")
+
+
+def test_never_exposes_the_token_itself():
+    """★トークンの中身を返さない。画面・ログ・この関数の戻り値のどこにも出さない。
+
+    アクセストークンは投稿・収集の権限をそのまま持つ資格情報（CLAUDE.md §17b）。
+    棚卸しに必要なのは「あるか」「いつ更新したか」だけで、値そのものは要らない。
+    """
+    secret = "THAAsecretvalue123"
+    s = summarize_accounts([{"account": "a1", "access_token": secret, "user_id": "1",
+                             "token_updated_at": "2026-09-07 10:00:00"}],
+                           now=datetime(2026, 9, 11, 10, 0))[0]
+    assert secret not in repr(s), f"トークンが戻り値に含まれている: {s}"
+    assert s["has_token"] is True
+    print("  ✓ トークンの値を戻り値に含めない OK")
+
+
+def test_shows_role_so_outsourced_is_visible():
+    """運用種別も出す（外注として登録できているかの確認に使う）。"""
+    rows = [{"account": "own", "access_token": "t", "user_id": "1",
+             "token_updated_at": "2026-09-07 10:00:00"},
+            {"account": "vend", "access_token": "t", "user_id": "2",
+             "token_updated_at": "2026-09-07 10:00:00", "role": "外注"}]
+    out = summarize_accounts(rows, now=datetime(2026, 9, 11, 10, 0))
+    assert out[0]["is_outsourced"] is False
+    assert out[1]["is_outsourced"] is True
+    print("  ✓ 運用種別を表示 OK")

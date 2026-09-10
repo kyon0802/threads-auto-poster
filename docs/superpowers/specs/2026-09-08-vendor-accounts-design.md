@@ -1,6 +1,6 @@
 # 外注アカウント対応（収集・外注管理のみ）設計 — 2026-09-08
 
-- 状態: **実装済み**（`tests/test_vendor_accounts.py` 37本・全体175本パス）
+- 状態: **実装済み**（`tests/test_vendor_accounts.py` 43本・全体181本パス）
 - 関連: **[2026-09-06-cross-account-analytics-design.md](2026-09-06-cross-account-analytics-design.md)**
 
 ## 先行設計との関係（2026-09-09 追記・重要）
@@ -98,6 +98,8 @@ threads_poster/publisher.py    外注アカは公開しない（トークン更�
 threads_poster/collector.py    本文を保存
 threads_poster/inventory.py    monitored_accounts()（外注を在庫監視から除外）
 threads_poster/vendor.py       新規・外注管理指標（純関数）
+threads_poster/accounts_status.py 新規・トークンの棚卸し（純関数・値は返さない）
+scripts/check_accounts.py      新規・登録状況とトークンの生死を確認（読取専用）
 scripts/get_auth_url.py        --collect-only（投稿権限なしのトークンを取る）
 scripts/setup_account.py       --role / --sheet-id、打ち間違いとテスト投稿を拒否
 scripts/exchange_token.py      --out（トークンを画面に出さず0600ファイルへ保存）
@@ -105,36 +107,69 @@ threads_poster/html_report.py  build_vendor_report()
 main_weekly.py                 外注は分析/生成をスキップ・外注レポートを1通送る
 main_monitor.py                monitored_accounts() を使う
 scripts/add_vendor_columns.py  新規・既存シートへの列追加（冪等・DRY-RUN既定）
-tests/test_vendor_accounts.py  新規37本
+tests/test_vendor_accounts.py  新規43本
 ```
 
 ## 人がやること（コードでは代われない）
 
-**前提の確認（2026-09-09 時点で未確定）**: 2026-09-07 のセッション「外注先アカウントの分析」で
-API連携まで到達していた形跡がある（取得した1ヶ月分のCSVに Threads インサイトAPI の指標一式が揃っている）。
-ただし **そのトークンがシステムの読むシートに登録されていない**ため、現状システムからは見えない。
-まず「9/7に取得した長期トークンが手元に残っているか」を確認すること。
+### まず既存トークンを確認する（取り直す前に）
+
+長期トークンは**60日有効**。2026-09-07 に発行していれば 11月上旬まで生きている。
+どのシートに登録済みか・まだ使えるかを、読み取り専用で確認できる:
+
+```
+python3 scripts/check_accounts.py --sheet-id <ID> --verify
+```
+
+トークンの値は表示せず、「あるか／いつ更新したか／実際に使えるか」だけを出す。
+**生きていれば認可からやり直す必要はない**（下の「登録だけ」へ）。
+
+| 確認結果 | やること |
+|---|---|
+| 登録済み・使える | 何もしなくてよい（運用種別が `外注` かだけ確認） |
+| 手元にトークンがある（未登録） | 列追加 → **登録だけ**（手順B） |
+| 失効・行方不明 | 認可から取り直す（手順C） |
+
+### 手順A：列の追加（どの道これは必要・1回だけ）
+
+```
+python3 scripts/add_vendor_columns.py --sheet-id <ID>          # 確認のみ
+python3 scripts/add_vendor_columns.py --sheet-id <ID> --apply  # 実行
+```
+
+### 手順B：既存トークンを登録するだけ
+
+```
+python3 scripts/setup_account.py --token-file <トークンを書いたファイル> \
+    --account <アカウント名> --role 外注 --sheet-id <ID>
+```
+
+**投稿権限つきのトークンでも問題ない**（下記）。`--add-test-post` は付けない（スクリプトが拒否する）。
+
+### 手順C：取り直す場合だけ
 
 1. 外注先に **Threadsテスター追加 → 承認**をしてもらう（アカウント所有者しかできない）
-2. 列を追加：`python3 scripts/add_vendor_columns.py --sheet-id <seizogyoのID> --apply`
-3. 認可URLを出す：`python3 scripts/get_auth_url.py --collect-only`
-   → **`--collect-only` で投稿権限を要求しない**（下記）。対象アカでログインした状態で承認
-4. 長期トークンへ交換：`python3 scripts/exchange_token.py <認可コード> --out ~/.config/threads-poster/vendor_a.tmp`
-   → `--out` 指定でトークンを**画面に出さず**0600のファイルへ保存する
-5. 登録：`python3 scripts/setup_account.py --token-file <保存先> --account <アカウント名>
-   --role 外注 --sheet-id <seizogyoのID>`（**`--add-test-post` は付けない＝スクリプトが拒否する**）
+2. `python3 scripts/get_auth_url.py --collect-only` → 対象アカでログインした状態で承認
+3. `python3 scripts/exchange_token.py <認可コード> --out ~/.config/threads-poster/vendor_a.tmp`
+4. 手順B で登録 → 終わったらトークンファイルを `rm`
 
-### トークン自体に投稿権限を付けない（二重の防御）
+### 投稿権限つきトークンをそのまま使ってよい（2026-09-11 判断）
 
-先行設計の「やらないこと」に **分析専用アカウントへの自動投稿（トークンに投稿権限を付与しない）** とある。
-コード側（publisher）でも投稿を止めているが、`--collect-only` で
-`threads_content_publish` を要求しないことで、**万一コードの分岐をすり抜けても API 側が投稿を拒否する**。
+先行設計には「分析専用アカウントのトークンに投稿権限を付与しない」とあるが、
+これは**必須ではなく多層防御の1枚目**。既に発行済みのトークンを使い回せるほうが運用が軽い。
 
-| | 自社アカ | 外注アカ（`--collect-only`） |
-|---|---|---|
-| threads_basic | ○ | ○ |
-| threads_manage_insights | ○ | ○ |
-| **threads_content_publish** | ○ | **×** |
+- **投稿を止めているのはコード側**（`publisher` が運用種別=外注をスキップ・テストで固定）。
+  さらに外注アカには投稿タブ `投稿_<acc>` を作らないので、そもそも公開対象の行が存在しない。
+- 収集に必要な権限は投稿権限つきトークンにも含まれるため、**そのまま収集できる**。
+- `--collect-only` は**新規取得するときの推奨**として残す（コストがゼロなので、取り直すなら付ける）。
+
+つまり「2種類のトークンを発行し分ける」必要はない。**取り直すときだけ権限を絞る**。
+
+| | 自社アカ | 外注アカ（新規取得時の推奨） | 外注アカ（既存を流用） |
+|---|---|---|---|
+| threads_basic | ○ | ○ | ○ |
+| threads_manage_insights | ○ | ○ | ○ |
+| threads_content_publish | ○ | ×（`--collect-only`） | ○のままでよい |
 
 `setup_account.py` は運用種別の打ち間違い（例「がいちゅう」）と、外注アカへの
 `--add-test-post` を**登録の入口で拒否**する。前者は `is_outsourced()` が未知値を自社扱いに
