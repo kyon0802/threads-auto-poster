@@ -26,12 +26,18 @@
 > 既存の未来在庫の最終日の翌日から予約するようになり（`existing_posts` 注入）、`FORCE_CYCLE=1` で
 > 臨時実行しても次サイクルと日程が重複しない。
 >
+> ✅ **外注2アカを収集対象に追加し、6アカ運用へ（2026-09-11）**：自社4アカ（投稿＋生成あり）＋
+> 外注2アカ（**収集と外注管理のみ・投稿も生成もしない**）。外注アカは seizogyo シートに相乗りし、
+> `accounts` タブの「運用種別」＝`外注` で区別する。実測確認済み（インサイト各84行・本文つき・エラー0）。
+> 詳細は §2 と docs/CHANGELOG.md §31。
+>
 > ✅ **PDCA第1段は稼働中（2026-09-01 マージ＋シート移行済み）**：4シート全てに型ラベル3列＋
 > `お手本DB_<acc>`＋`仮説ログ` を追加済み。09-02 サイクルから勝ち/負け本文注入と型ラベル記録が始まる。
 > 設計＝docs/superpowers/specs/2026-09-01-pdca-closed-loop-design.md・実装＝CHANGELOG §29。
 >
 > 状態確認は必ず実測で：生成が動くか → **`preflight.yml` を手動実行**（副作用ゼロ）／
-> 投稿在庫があるか → `python3 main_monitor.py`（読取専用）。
+> 投稿在庫があるか → `python3 main_monitor.py`（読取専用）／
+> **アカウント登録とトークンの生死 → `python3 scripts/check_accounts.py --sheet-id <ID> --verify`（読取専用）**。
 
 これは3層構想の **第1層**。第2層（Threads→LINE導線）、第3層（LINE上でClaude自動鑑定）は後続フェーズ（§9）。
 
@@ -43,8 +49,9 @@
 スプレッドシート（事業ごとに1枚・投稿キュー＋アカウント/トークン＋インサイト＋ナレッジ）
         ↑ 読む / 結果(status, posted_id, インサイト, 分析, 生成投稿)を書き戻す
 GitHub Actions（すべて別systemの6本）
-  post.yml    10分おき  → main.py         投稿の公開（Threads API）
-  collect.yml 日次04:00 → main_collect.py インサイト収集（読み取り専用）
+  post.yml    10分おき  → main.py         投稿の公開（Threads API・**自社4アカのみ**）
+                                          ＋全アカのトークン自動リフレッシュ（7日経過で更新）
+  collect.yml 日次04:00 → main_collect.py インサイト収集（読み取り専用・自社4＋外注2の全6アカ）
   weekly.yml  日次06:00 → main_weekly.py  3日サイクルゲート→分析→レポート→生成→メール
   monitor.yml 日次08:00 → main_monitor.py 投稿在庫の監視（読取専用・異常時のみ通知）
   preflight.yml 手動のみ → main_preflight.py 生成AIの疎通/残高チェック（副作用ゼロ）
@@ -63,19 +70,43 @@ GitHub Actions（すべて別systemの6本）
 ## 2. 現在の運用状態（2026-08-31時点）
 
 - **repo**: `kyon0802/threads-auto-poster`（**公開**・§17厳守）。gh CLI は `/opt/homebrew/bin/gh`（アカウント kyon0802）。
-- **稼働事業（Secret `BUSINESSES`）**: 4事業4アカウント（全て自動生成ON・2026-08-31〜）。
+- **稼働事業（Secret `BUSINESSES`）**: 4事業4アカウント（全て自動生成ON・2026-08-31〜）＋**外注2アカウント（収集・管理のみ・2026-09-08〜）**。
   - `seizogyo`（製造業・`takumi_kojo_navi`）
   - `seizogyo2`（製造業・共感認知型 `tenshokuman`＝住田）
   - `seizogyo3`（製造業・本音暴露型 `pashi`＝ぱし。2026-07-08にseizogyo2から分離＝**アカウント別シート**）
 - **廃止**: `uranai`（占い「結」・`miko_yui_musubi`）は 2026-07-28 に**廃止**。156投稿で累計227表示（平均1.5）とアカウント側の配信抑制が疑われたため、人格・アカウント名ごと終了。ナレッジのみローカルへ保全（占いThreads-note事業/結_アーカイブ_20260728）。**新しい占いアカウントは未定**。
   - `meguri`（占い「澪」・アカウントキー `mio__meguri`＝**アンダースコア2つ**）。2026-07-28に BUSINESSES へ追加して稼働開始し、ローンチ26本（07-29〜08-10）を公開済み。2026-08-31に自動生成もON。
+- **★外注アカウント2つ（2026-09-11 稼働開始・seizogyo シートに相乗り）＝合計6アカ運用**:
+  外注先が運用するアカウントを **データ収集と外注管理のためだけ**に載せている。
+  アカウント名は第三者のものなので**このファイルには書かない**（§17b。実名はシートと非公開メモリ）。
+  - `accounts` タブの「運用種別」＝`外注`。**投稿しない／AI生成しない／在庫監視の対象外**
+    （機械で禁止済み・`tests/test_vendor_accounts.py`）。収集とトークン更新だけ自社アカと同じ扱い。
+  - **投稿タブ `投稿_<acc>` は作らない**（作らなければ公開対象の行が存在し得ない＝二重の防御）。
+  - トークンは**投稿権限なし**（`threads_basic`＋`threads_manage_insights` のみ）で取得済み。
+  - 2026-09-11 に実測確認済み：**インサイト各84行・本文つき・エラー0件**、外注レポートの生成も確認。
+  - 週次（日曜）に「外注作業量レポート」を2アカ1通で送る。設計＝
+    docs/superpowers/specs/2026-09-08-vendor-accounts-design.md（先行設計＝2026-09-06-cross-account-analytics）。
+
+### ★状態を推測しないこと（2026-09-11 の教訓）
+
+2026-09-07 に外注アカのAPI連携とデータ取得を実施していたが、**トークンをシートに登録しないまま
+セッションが終わり、記録も残らなかった**。次のセッション（09-08）はその事実を知らず「未着手」と判断し、
+認可からやり直した。**過去にやったかどうかは記憶や推測ではなく、次のコマンドで実測する。**
+
+```
+python3 scripts/check_accounts.py --sheet-id <ID> --verify   # 登録状況とトークンの生死（読取専用）
+```
+
+シートIDが分からなくても、**サービスアカウントが共有されているシートは一覧できる**
+（`gspread.authorize(creds).list_spreadsheet_files()`）。`BUSINESSES` Secret が読めないことは
+「シートが分からない」理由にならない。
 - **3日PDCAサイクル**: weekly.yml は毎日叩くが `is_cycle_day`（起点 2026-06-28・3日周期）の日だけ本処理。各サイクルで「翌日から3日×4本/日」を生成→隙間なく連続。手動実行は `FORCE_CYCLE=1`。
 - **投稿スケジュール**: 事業別プリセット（`schedule.PRESETS`）で1日4本・ランダム配置・最低間隔30分。seizogyo=昼1＋夜3／meguri=朝昼夕夜の4窓／seizogyo2=生活リズム4窓（朝通勤・昼休憩・夕帰宅・夜寝る前）／seizogyo3=昼夕寄り4窓（seizogyo2と窓が重ならないことをテストで機械保証＝CIB配慮）。
 - **生成**: `GENERATE_POSTS=1`＋`ANTHROPIC_API_KEY`。`GEN_STATUS`=draft(人が確認)/queued(全自動公開)。**事業別に `GEN_STATUS_<NAME>` で上書き可**（製造業だけdraft等）。生成前に必須タブゲート（§17e）、生成後に機械コンプラゲート。**2026-08-31に seizogyo2/seizogyo3/meguri の `GEN_POSTS_*` を 12 にして全4アカ自動生成ON**（それまでは立ち上げ期の手動運用のため 0＝オフだった）。
 - **メール**: `ENABLE_EMAIL=1` でアカウントごとに週次レポートを個別送信（宛先は Variable `MAIL_TO` / `MAIL_TO_<事業名>`・認証は Gmail アプリパスワード。実アドレスは公開repoに書かない＝§17b）。run失敗時はGitHub純正の失敗通知メールも飛ぶ。
 - **データ蓄積**: インサイト/投稿/アカウント指標/週次レポートは全て**追記・upsert**で、過去データは消えない（2026-09-07実測: takumi インサイト7,958行・161投稿・6月分も健在）。`.clear()` するのは `インサイト分析_<acc>`（派生集計）と `殿堂入り_<acc>`（再計算可能）のみ。
 - **在庫監視**: `monitor.yml`（日次 08:00 JST・読取専用）が各アカの未来在庫と残り日数を算出し、在庫ゼロ/残りわずかのときだけ【要確認】メールを送る。在庫ゼロの間は run を exit 2 で赤くする。**投稿ジョブは在庫ゼロでも成功で終わるため、停止を検知できる唯一の仕組み**（§10・docs/CHANGELOG.md §27）。
-- **テスト**: `python3 -m pytest tests/ -q`（140本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。
+- **テスト**: `python3 -m pytest tests/ -q`（185本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。
 - **過去インシデントの教訓は §10 と docs/CHANGELOG.md（§13/§14/§16/§27）**。特に「row_id 必須・全タブ一意」は絶対。
 
 ---
@@ -118,6 +149,10 @@ threads_poster/
   collector.py                インサイト日次収集（Publisher対称・読み取り専用）
   analyzer.py                 実績集計（純関数・AI不使用）。analyze_windowed=直近7日/前7日/累計、傾向は28日窓
   inventory.py                投稿在庫（ランウェイ）の算出（純関数・週次レポートと在庫監視で共用）
+                              monitored_accounts()＝外注アカを在庫監視から除外
+  vendor.py                   外注アカの作業量指標（純関数・AI不使用）。新規本文数/使い回し率/
+                              稼働日/時間帯。analyzer.py（自社の勝ちパターン）とは目的が違うので分離
+  accounts_status.py          トークンの棚卸し（純関数）。残り日数と、通信エラー/権限不足の言い分け
   errors.py                   失敗理由の分類（残高不足/認証/レート/一時障害・純関数）
   hall_of_fame.py             殿堂入り＝自アカ長期の当たり30本の構築とプロンプト用抽出（純関数）
   reporter.py                 週次レポートのタブ追記＋Markdownミラー（AI不使用）
@@ -141,10 +176,13 @@ scripts/                      ローカルで人が実行するセットアッ�
   batch_to_csv.py             content→sheetブリッジ（立ち上げバッチMd→posts CSV）
   sync_knowledge.py           ローカルナレッジ→ナレッジ_タブ同期
   add_pdca_columns.py         PDCA移行: 投稿タブ3列追加＋お手本DB/仮説ログ作成（冪等・DRY-RUN既定）
+  add_vendor_columns.py       外注対応: accounts に「運用種別」・インサイトに「本文」を追加（冪等・DRY-RUN既定）
+  check_accounts.py           登録済みアカウントとトークンの生死を確認（読取専用・トークン値は出さない）
   local_run.sh                .env読込→DRY_RUN既定でローカル実行
-tests/                        テスト（API不要・モック・140本）。pytest でも直実行でも可
+tests/                        テスト（API不要・モック・185本）。pytest でも直実行でも可
   test_logic.py / test_collect.py / test_phase2.py / test_schedule.py
   test_report_window.py（期間窓・在庫・エラー分類） / test_monitor.py / test_threads_api_masking.py
+  test_vendor_accounts.py（外注アカ: 投稿しない/生成しない/在庫監視しない/収集はする）
 sheet_templates/              accounts.csv / posts.csv / posts_example.csv（記入例）
 .claude/agents/               このrepo専用のサブエージェント定義10体（orchestrator が回し役。
                               api-specialist / system-architect / devops / insights-engineer /
@@ -168,13 +206,18 @@ requirements.txt / .env.example / README.md / SETUP.md
 > 真実は `threads_poster/sheets.py`（`*_FIELD_ALIASES` / `per_account_post_headers` / タブ定数）。見出しは**日本語(正規)でも英語(旧名)でも読める**（エイリアス層）。タブ名は変えない。見出し行も消さない。
 
 **`accounts` タブ**:
-`アカウント`(account) / `ユーザーID`(user_id) / `アクセストークン`(access_token) / `トークン更新日時`(token_updated_at) / `本日投稿数`(daily_count) / `カウント日付`(daily_count_date)
+`アカウント`(account) / `ユーザーID`(user_id) / `アクセストークン`(access_token) / `トークン更新日時`(token_updated_at) / `本日投稿数`(daily_count) / `カウント日付`(daily_count_date) / `運用種別`(role)
+
+- **`運用種別`**: 空 or `自社` ＝ 自社運用（従来どおり投稿・生成・在庫監視の対象）。`外注` ＝ 外注アカ
+  （**投稿も生成もせず、収集と管理のみ**）。未知の値は自社扱い（打ち間違いで投稿が全停止しないため）。
+  外注アカには投稿タブ `投稿_<acc>` を作らない。列の追加は `scripts/add_vendor_columns.py`。
 
 **投稿タブ = アカウントごとに分割**。タブ名 **`投稿_<アカウント名>`**（`<アカウント名>`は accounts の `アカウント` と一致。**アカウントはタブ名から自動判定するので「アカウント」列は持たない**）。見出し:
 `投稿ID`(row_id) / `投稿日時`(post_datetime, JST `YYYY-MM-DD HH:MM`・文字列書式) / `本文`(text) / `メディア種類`(media_type, TEXT/IMAGE/VIDEO/CAROUSEL) / `メディアURL`(media_url) / `返信先ID`(reply_to=親の投稿ID) / `返信できる人`(reply_control) / `状態`(status) / `投稿後ID`(posted_id) / `投稿実施日時`(posted_at) / `エラー`(error) / `フック型`(hook_type) / `内容型`(content_type) / `参照お手本ID`(exemplar_ref)
 
 **システムが自動生成/管理するタブ**:
-- `インサイト_<acc>` … 投稿別インサイトの日次スナップショット（posted_id×取得日で冪等）
+- `インサイト_<acc>` … 投稿別インサイトの日次スナップショット（posted_id×取得日で冪等）。
+  **`本文` 列あり**（2026-09-08 追加）＝外注の使い回し率の算出に必要。APIは元から本文を返しており呼び出しは増えない
 - `アカウント指標_<acc>` … フォロワー数等の日次スナップショット
 - `インサイト分析_<acc>` … analyzer の週次集計（毎回全置換）
 - `週次レポート` … reporter の追記
@@ -228,9 +271,12 @@ requirements.txt / .env.example / README.md / SETUP.md
 
 ## 7. 次にやること（ロードマップ / 優先順）
 
-0. **★障害復旧（最優先・2026-07-28発生）**: Anthropic APIの残高切れで生成が4サイクル連続失敗し、
-   全アカウントの在庫がゼロ。クレジット購入 → `threads-weekly-report` を手動実行で復旧する。
-   Auto-reload を有効にすれば恒久解決（詳細と経緯は docs/CHANGELOG.md §27）。
+0. ~~**★障害復旧（2026-07-28発生）**: Anthropic API残高切れで生成が4サイクル連続失敗し在庫ゼロ。~~
+   → **2026-08-31 復旧済み**。Auto-reload を有効にすれば恒久解決（経緯は docs/CHANGELOG.md §27）。
+0-b. **外注アカの初回レポート確認（2026-09-14 日曜）**: 外注2アカを 09-11 に収集開始した。
+   最初の「外注作業量レポート」が届いたら、数字が妥当か（本数・使い回し率・時間帯）を人が一度見る。
+   直近7日の実測では **制作量は回復（使い回し0〜8%）だが表示は低いまま**（中央値2〜6）で、
+   投稿が 10時・21時・0時 に寄っている＝分析上いちばん弱い枠。時間帯の是正が次の論点。
 1. **★澪（meguri）の起動（HITL・コードとシートは完成、トークン待ちで inert）**:
    ①テスター追加 → 認可 → 長期トークン取得（`scripts/get_auth_url.py` → `scripts/exchange_token.py`）
    ②accounts にトークン登録 ③Secret `BUSINESSES` に meguri 追加 ④`fill_week_schedule.py --preset meguri`
@@ -279,6 +325,11 @@ requirements.txt / .env.example / README.md / SETUP.md
 - 親子（ツリー）は親を必ず先の時刻に。親が同回で公開→子は同回 or 次回に自動連結。
 - `status=publishing` のまま残った行は公開処理の中断痕。実際に投稿されたかThreadsで確認してから空に戻す（無確認で戻すと二重投稿の恐れ）。
 - `DRY_RUN=1` はシートを**一切書き換えない**（公開対象の検出と疎通確認のみ）。
+- **★ローカルの `.env` には `DRY_RUN=1` が入っている。** `set -a; . ./.env; set +a` で読み込むと
+  以降の実行が全て無書込になる。ログは `収集結果: {...errors: 0}` と**成功に見える**ため、
+  シートを見ないと気づけない（2026-09-11 に実際に誤認した）。ローカルで本番と同じ書込を試すときは
+  `DRY_RUN= ` を明示して打ち消し、**必ずシート側で結果を確認する**。
+  GitHub Actions は `.env` を読まないので、この罠は本番の自動運用には影響しない。
 - **「今すぐ公開」になる行があるときに手作業でシートを編集しない**（10分cronとレースして二重投稿の原因＝docs/CHANGELOG.md §16）。整備は**未来時刻の行**に対して行う。
 - **障害の切り分け（docs/CHANGELOG.md §13/§14）**: Meta側の `OAuthException code 200 "API access blocked"` ＝アプリ/アカウント主体のブロック→**Threadsアプリで人が承認解除**が必須。Google Sheets の 5xx/429 ＝一過性→`with_retry` が自動回復。トークン失効は code 190（別物）。切り分けは「シートからトークンを読み `GET /v1.0/me` を `requests` で叩く」（urllibはmacOSのSSLで不可）。
 - Sheets への書込は batch 化済み（行単位 update_cells / 一括 append_rows）。**投稿ごとに get_all_records を呼ぶ実装は Read/min 429 に当たる**ので書かない（docs/CHANGELOG.md §19）。
@@ -300,6 +351,16 @@ requirements.txt / .env.example / README.md / SETUP.md
 
 ### 17b. 絶対に公開repoに上げない（漏洩=事業/凍結リスク）
 - **秘密**：アクセストークン／APIキー（ANTHROPIC_API_KEY等）／サービスアカウントJSON → **GitHub Secrets と 非公開シートのみ**。
+
+> **★アクセストークンの置き場所（2026-09-11 明文化・例外なし）**
+> トークンの正本は **非公開シートの `accounts` タブだけ**。次のどこにも残さない：
+> ローカルのメモ/ファイル、この repo（公開・非公開を問わず）、GitHub の「外から見えない場所」、
+> チャットの本文、ターミナルの画面（＝シェル履歴とスクショに残る）。
+> - 取得時は `exchange_token.py --out <path>` で **0600 の一時ファイル**に落とし、
+>   `setup_account.py --token-file <path>` で登録したら **すぐ `rm`** する。画面には出さない。
+> - 状態確認は `scripts/check_accounts.py`（値を出さず「あるか/いつ更新したか/使えるか」だけ表示）。
+> - 60日で失効するが、`post.yml` の publisher が7日経過で自動リフレッシュするため通常は放置でよい
+>   （外注アカもリフレッシュ対象に含めてある）。
 - **事業ノウハウ**：プロフィール・声/戦略・**ガイドライン/規約の分析結果**・コンプラルール・BAN原因分析 → **非公開シート ＋ ローカル(`製造業Threads`/`占いThreads-note事業`)/非公開repo**。
 - **実データ**：投稿本文資産・インサイト・分析結果・フォロワー/個人情報 → **非公開シート**。
 - スプレッドシートID → public コードにハードコードしない（Secret/Variable）。

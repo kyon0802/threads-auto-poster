@@ -78,7 +78,26 @@ ACCOUNTS_FIELD_ALIASES = {
     "token_updated_at": ["トークン更新日時", "token_updated_at"],
     "daily_count":      ["本日投稿数", "daily_count"],
     "daily_count_date": ["カウント日付", "daily_count_date"],
+    # 運用種別（2026-09-08 追加）。空＝自社（＝既存アカはシート未変更で従来どおり動く）。
+    # 「外注」＝外注先が運用するアカウント。こちらは投稿も生成もせず、収集と管理だけを行う。
+    "role":             ["運用種別", "role"],
 }
+
+# 運用種別として「外注」を意味する値。表記ゆれと英語表記の両方を受ける。
+OUTSOURCED_ROLES = ("外注", "outsourced")
+
+
+def is_outsourced(account_row: dict) -> bool:
+    """このアカウントが外注運用（＝投稿も生成もせず、収集と管理だけを行う）か。
+
+    未知の値は **自社扱い**（False）。理由:
+      - 外注扱いに倒すと、自社アカの運用種別を打ち間違えただけで投稿が全停止する。
+      - 逆に外注アカを自社扱いしても、外注アカには投稿タブ(投稿_<acc>)を作らない運用のため
+        投稿対象の行が存在せず、実際の誤投稿は起きない。
+    よって「打ち間違いの被害が小さい側」＝自社扱いを既定にする。
+    未知値は呼び出し側（publisher 等）が警告ログを出して人に気づかせる。
+    """
+    return str(account_row.get("role") or "").strip().lower() in OUTSOURCED_ROLES
 POSTS_FIELD_ALIASES = {
     "row_id":        ["投稿ID", "row_id"],
     "account":       ["アカウント", "account"],
@@ -111,6 +130,9 @@ INSIGHTS_FIELD_ALIASES = {
     "post_datetime":   ["投稿日時", "post_datetime"],
     "media_type":      ["メディア種類", "media_type"],
     "text_len":        ["本文長", "text_len"],
+    # 本文（2026-09-08 追加）。外注アカの「使い回し率」は本文の照合でしか出せないため保存する。
+    # Threads API の投稿一覧は元から本文を返しており、API 呼び出しは増えない。
+    "text":            ["本文", "text"],
     "is_tree":         ["ツリー", "ツリー有無", "is_tree"],
     "views":           ["表示回数", "views"],
     "likes":           ["いいね", "likes"],

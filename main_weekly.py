@@ -22,14 +22,15 @@ from datetime import datetime, date, timedelta
 from functools import partial
 from zoneinfo import ZoneInfo
 
-from threads_poster.sheets import GoogleSheetStore
+from threads_poster.sheets import GoogleSheetStore, is_outsourced
 from threads_poster.analyzer import Analyzer, follower_trend
 from threads_poster.hall_of_fame import build_hall_of_fame
 from threads_poster.errors import classify_generation_error
 from threads_poster.inventory import compute_runway, runway_message
+from threads_poster.vendor import summarize_activity
 from threads_poster.reporter import Reporter
 from threads_poster.generator import Generator, GeneratorError
-from threads_poster.html_report import build_html
+from threads_poster.html_report import build_html, build_vendor_report
 from threads_poster.schedule import build_schedule, PRESETS
 from threads_poster.strategy import generate_strategy
 from threads_poster.mailer import send_html
@@ -172,6 +173,41 @@ def n_posts_for(name: str, env, default_n: int, today: date) -> int:
     return days_until_next_cycle(today) * POSTS_PER_DAY
 
 
+VENDOR_WINDOW_DAYS = 7   # 外注の作業量を見る窓（週次＝直近7日）
+
+
+def vendor_activity_rows(store, account_rows: list[dict], *, business: str,
+                         today=None, days: int = VENDOR_WINDOW_DAYS) -> list[dict]:
+    """外注アカだけを集計し、外注レポートの材料（行のリスト）を返す。
+
+    自社アカは従来の週次レポートで見るのでここには混ぜない。
+    材料はインサイトタブ（日次収集済み）だけで、追加のAPI呼び出しもAI生成も行わない。
+    """
+    out = []
+    for a in account_rows:
+        if not is_outsourced(a):
+            continue
+        acc = a["account"]
+        row = summarize_activity(store.get_insights(acc), days=days, today=today)
+        row["account"] = acc
+        row["business"] = business
+        out.append(row)
+    return out
+
+
+def should_generate_for_account(account_row: dict) -> tuple[bool, str]:
+    """このアカウントにAI生成をかけてよいか。(可否, 理由) を返す。
+
+    外注アカ（運用種別=外注）は生成しない:
+      1. 生成しても誰も公開しない（外注アカには投稿しないため）＝APIの課金だけ増える。
+      2. 外注先が自分で書いた投稿と二重になる。
+    生成をスキップしても分析・レポートは通常どおり行う（外注管理が主目的のため）。
+    """
+    if is_outsourced(account_row):
+        return False, "外注アカウントのため生成しません（収集と管理のみ）"
+    return True, ""
+
+
 def gen_status_for(name: str, env, default_status: str) -> str:
     """事業ごとの生成後ステータス（draft=人が確認 / queued=自動公開）。
 
@@ -240,7 +276,8 @@ def main() -> int:
         log.info("=== 事業 '%s' の週次処理 (sheet=%s…) ===", name, str(sid)[:10])
         try:
             store = GoogleSheetStore(sa_info, sid)
-            accounts = [a["account"] for a in store.get_accounts() if a.get("account")]
+            # 運用種別（自社/外注）を見るため、名前だけでなく行ごと保持する。
+            account_rows = [a for a in store.get_accounts() if a.get("account")]
             posts_all = store.get_posts()  # 事業で1回だけ読む（TOP5本文結合に使い回す）
         except Exception as e:  # noqa: BLE001
             failures += 1
@@ -250,7 +287,34 @@ def main() -> int:
         theme = THEME.get(name, "seizo")
         # メール対象の事業か（EMAIL_BUSINESSES 空＝全事業＝運用中の全アカウントに個別送信）。
         in_email = (not email_businesses) or (name in email_businesses)
-        for acc in accounts:
+        # 外注アカは自社アカと処理が全く違う（分析も生成もせず、作業量だけ見る）。
+        # ループ本体に if を挟み込むと自社側の流れが読みにくくなるので、先に切り出す。
+        # レポート日かつメール対象事業のときだけ集計する（生成日に無駄なシート読取をしない＝429対策）。
+        if do_report and in_email and any(is_outsourced(a) for a in account_rows):
+            try:
+                vendor_rows = vendor_activity_rows(store, account_rows, business=name, today=today)
+                if vendor_rows:
+                    vhtml = build_vendor_report(vendor_rows, gen_date)
+                    vname = f"外注作業量レポート_{name}_{gen_date}.html"
+                    with open(os.path.join(reports_dir, vname), "w", encoding="utf-8") as f:
+                        f.write(vhtml)
+                    # 外注アカは2つあっても1通にまとめる（アカウントごとに届くと管理しづらい）。
+                    # alert＝投稿ゼロ or 新規本文ゼロ。件名に【要確認】が付く。
+                    v_alert = any(r["posts"] == 0 or r["unique_texts"] == 0 for r in vendor_rows)
+                    email_reports.append({"account": f'外注{len(vendor_rows)}アカ',
+                                          "label": BIZ_LABEL.get(name, name) + "・外注",
+                                          "business": name, "html": vhtml, "filename": vname,
+                                          "alert": v_alert})
+            except Exception as e:  # noqa: BLE001 外注レポートの失敗で自社の週次を止めない
+                failures += 1
+                log.exception("事業 '%s' の外注作業量レポートに失敗（自社分は継続）: %s", name, e)
+        for acc_row in account_rows:
+            acc = acc_row["account"]
+            # 外注アカはここで打ち切る。以降（分析・殿堂入り・レポートタブ・生成・並べ替え）は
+            # 「自社が書いた投稿」を前提にした処理で、外注アカには意味がなく害になる。
+            if is_outsourced(acc_row):
+                log.info("%s: 外注アカウントのため分析・生成はスキップ（作業量レポートのみ）", acc)
+                continue
             try:
                 analyzer = Analyzer(store, now_fn=lambda: now_local)
                 analysis = analyzer.run(acc)
@@ -283,7 +347,14 @@ def main() -> int:
                 # レポートから読み取れなかった原因なので、先に走らせて結果を持ち回る。
                 # 生成の例外はここで受け止め、レポート・メールは必ず最後まで出す。
                 gen_info = None
-                if not do_generate_cycle:
+                # 外注アカはここで止める（generator の必須タブゲートより前）。
+                # 外注アカに プロフィール_<acc> を用意する運用ではないため、
+                # ゲートまで進ませると「必須タブなし」で毎回 loud fail してしまう。
+                may_generate, skip_reason = should_generate_for_account(acc_row)
+                if not may_generate:
+                    gen_info = {"ok": None, "reason": skip_reason}
+                    log.info("%s: %s", acc, skip_reason)
+                elif not do_generate_cycle:
                     gen_info = {"ok": None, "reason": "本日は生成日ではありません（生成=日・水）"}
                 elif not generate:
                     gen_info = {"ok": None, "reason": "生成オフ（GENERATE_POSTS=0 または PAUSED=1）"}

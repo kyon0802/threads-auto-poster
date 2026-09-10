@@ -24,7 +24,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from threads_poster.sheets import GoogleSheetStore
-from threads_poster.inventory import summarize
+from threads_poster.inventory import monitored_accounts, summarize
 from threads_poster.html_report import build_inventory_alert
 from threads_poster.mailer import send_html
 from main import resolve_business_sheets
@@ -40,7 +40,9 @@ def collect(sheets, sa_info, now, warn_days: int) -> tuple[list[dict], int]:
     for name, sid in sheets:
         try:
             store = GoogleSheetStore(sa_info, sid)
-            accounts = [a["account"] for a in store.get_accounts() if a.get("account")]
+            # 外注アカは投稿しない＝在庫が常にゼロなので監視対象から外す
+            # （含めると毎日 critical で Actions が赤く固定され、本物の停止を見逃す）。
+            accounts = monitored_accounts(store.get_accounts())
             posts = store.get_posts()
         except Exception as e:  # noqa: BLE001 1事業の失敗で他事業の監視を止めない
             failures += 1

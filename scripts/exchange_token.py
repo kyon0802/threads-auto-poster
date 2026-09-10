@@ -26,12 +26,34 @@ from threads_poster.threads_api import ThreadsClient, ThreadsAPIError  # noqa: E
 GRAPH = "https://graph.threads.net"
 
 
+def save_token(path: str, token: str) -> str:
+    """トークンをファイルへ保存する。**他ユーザーに読めない権限(0600)** で作る。
+
+    アクセストークンは投稿・収集の権限をそのまま持つ資格情報。既定の権限(0644)だと
+    同じマシンの他ユーザーから読めてしまう（CLAUDE.md §17b）。
+    前後の空白・改行は落として、そのまま setup_account.py に渡せる形にする。
+    """
+    path = os.path.expanduser(path)
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    # 先に 0600 で作ってから書く（作成と権限設定の間に他人が読める瞬間を作らない）
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(str(token).strip())
+    os.chmod(path, 0o600)  # 既存ファイルを上書きした場合に備えて明示
+    return path
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("code", help="OAuth認可コード")
     ap.add_argument("--app-id", default=os.environ.get("THREADS_APP_ID"))
     ap.add_argument("--secret", default=os.environ.get("THREADS_CLIENT_SECRET"))
     ap.add_argument("--redirect", default=os.environ.get("THREADS_REDIRECT_URI", "https://localhost/"))
+    ap.add_argument("--out", default=None,
+                    help="長期トークンの保存先ファイル（0600で作成）。"
+                         "指定すると画面にトークンを表示しない。setup_account.py --token-file に渡す")
     args = ap.parse_args()
 
     if not (args.app_id and args.secret):
@@ -74,6 +96,18 @@ def main() -> int:
 
     long_token = data["access_token"]
     print(f"✓ 長期トークン取得 (expires_in={data.get('expires_in')}秒 ≒ {int(data.get('expires_in', 0)) // 86400}日)\n")
+
+    if args.out:
+        # --out 指定時はトークンを画面に出さない（ターミナル履歴・スクショに残さない）
+        path = save_token(args.out, long_token)
+        print(f"✓ 長期トークンを保存しました（権限600）: {path}")
+        print(f"  user_id : {user_id or '(取得できず。Threads APIで /me を確認)'}")
+        print("\n次のコマンドで accounts タブへ登録できます:")
+        print(f"  python3 scripts/setup_account.py --token-file {path} \\")
+        print("      --account <アカウント名> --role 外注 --sheet-id <対象シートID>")
+        print("\n登録が終わったらトークンファイルは削除してください:")
+        print(f"  rm {path}")
+        return 0
 
     print("=== accounts タブに貼る値 ===")
     print(f"  user_id          : {user_id or '(取得できず。Threads APIで /me を確認)'}")

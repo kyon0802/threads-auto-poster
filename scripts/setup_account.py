@@ -25,7 +25,7 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from threads_poster.sheets import (  # noqa: E402
-    header_maps, ACCOUNTS_FIELD_ALIASES, POSTS_FIELD_ALIASES, POSTS_TAB_PREFIX,
+    header_maps, is_outsourced, ACCOUNTS_FIELD_ALIASES, POSTS_FIELD_ALIASES, POSTS_TAB_PREFIX,
 )
 
 GRAPH = "https://graph.threads.net"
@@ -76,6 +76,26 @@ def upsert(ws, aliases: dict, key_internal: str, key_val: str, fields: dict) -> 
     return "更新"
 
 
+VALID_ROLES = ("", "自社", "own", "外注", "outsourced")
+
+
+def validate_options(role: str, add_test_post: bool) -> tuple[bool, str]:
+    """登録オプションの妥当性を返す。(可否, 理由)。
+
+    - 運用種別の打ち間違いを入口で弾く。is_outsourced() は未知の値を自社扱いにする
+      （投稿が全停止しない方へ倒す設計）ため、「外注のつもりで打ち間違え」がここを
+      通ると自社扱いで登録されてしまう。
+    - 外注アカにテスト投稿を作らせない。外注アカは投稿タブを作らない運用のため。
+    """
+    r = str(role or "").strip()
+    if r.lower() not in [v.lower() for v in VALID_ROLES]:
+        return False, (f"運用種別 '{role}' は不正です。"
+                       f"次のいずれかを指定してください: 自社 / 外注（空欄は自社扱い）")
+    if is_outsourced({"role": r}) and add_test_post:
+        return False, "外注アカウントにテスト投稿は作れません（投稿タブを作らない運用のため）"
+    return True, ""
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--token-file", required=True)
@@ -83,7 +103,17 @@ def main() -> int:
     # 上書きする事故になるため、必ず明示させる。
     ap.add_argument("--account", required=True)
     ap.add_argument("--add-test-post", action="store_true")
+    ap.add_argument("--role", default="",
+                    help="運用種別。外注アカウントは「外注」を指定（空欄=自社）")
+    ap.add_argument("--sheet-id", default=None,
+                    help="対象シートID（未指定なら環境変数 SPREADSHEET_ID）。"
+                         "外注アカは相乗り先の事業シートIDを明示すること")
     args = ap.parse_args()
+
+    ok, reason = validate_options(args.role, args.add_test_post)
+    if not ok:
+        print(f"中止: {reason}")
+        return 1
 
     token = open(os.path.expanduser(args.token_file)).read().strip()
 
@@ -113,7 +143,11 @@ def main() -> int:
         load_service_account(), scopes=["https://www.googleapis.com/auth/spreadsheets"]
     )
     gc = gspread.authorize(creds)
-    sh = gc.open_by_key(os.environ["SPREADSHEET_ID"])
+    sheet_id = args.sheet_id or os.environ.get("SPREADSHEET_ID")
+    if not sheet_id:
+        print("中止: --sheet-id か環境変数 SPREADSHEET_ID が必要です")
+        return 1
+    sh = gc.open_by_key(sheet_id)
     ws_a = sh.worksheet("accounts")
 
     now = datetime.now(ZoneInfo("Asia/Tokyo"))
@@ -127,6 +161,7 @@ def main() -> int:
         "token_updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
         "daily_count": "",
         "daily_count_date": "",
+        "role": args.role,
     })
     print(f"OK accounts {how}  account={acct}")
 
