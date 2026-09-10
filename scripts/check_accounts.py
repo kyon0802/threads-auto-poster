@@ -20,7 +20,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from threads_poster.accounts_status import summarize_accounts  # noqa: E402
+from threads_poster.accounts_status import classify_read_result, summarize_accounts  # noqa: E402
 from threads_poster.sheets import with_retry  # noqa: E402
 
 MARK = {"ok": "✓", "warn": "△", "expired": "×", "missing": "×", "unknown": "?"}
@@ -54,7 +54,7 @@ def verify_live(token: str) -> str:
     import requests
     try:
         r = requests.get("https://graph.threads.net/v1.0/me",
-                         params={"fields": "id,username", "access_token": token}, timeout=30)
+                         params={"fields": "id,username", "access_token": token}, timeout=60)
         me = r.json()
     except Exception as e:  # noqa: BLE001 ネットワーク断など
         return f"確認できず（通信エラー: {type(e).__name__}）"
@@ -62,15 +62,16 @@ def verify_live(token: str) -> str:
         # エラー本文にトークンは含まれないが、念のため message だけを拾う
         msg = (me.get("error") or {}).get("message", "")[:80]
         return f"使えない（{msg}）"
-    # 収集に必要な権限があるかも確認する（投稿一覧を1件だけ取得）
+    # 収集に必要な権限があるかも確認する（投稿一覧を1件だけ取得）。
+    # ★通信エラーと権限不足を混同しない（classify_read_result が言い分ける）。
+    err = st = js = None
     try:
         r2 = requests.get(f"https://graph.threads.net/v1.0/{me['id']}/threads",
-                          params={"fields": "id", "limit": 1, "access_token": token}, timeout=30)
-        ok_read = "data" in r2.json()
-    except Exception:  # noqa: BLE001
-        ok_read = False
-    return (f"生きている（@{me.get('username', '?')}）"
-            + ("・投稿一覧の取得OK" if ok_read else "・**投稿一覧が取得できない＝収集用の権限が不足**"))
+                          params={"fields": "id", "limit": 1, "access_token": token}, timeout=60)
+        st, js = r2.status_code, r2.json()
+    except Exception as e:  # noqa: BLE001 ネットワーク断・タイムアウト
+        err = e
+    return f"生きている（@{me.get('username', '?')}）・" + classify_read_result(error=err, status=st, body=js)
 
 
 def check(sheet_id: str, verify: bool) -> int:

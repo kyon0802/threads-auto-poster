@@ -80,3 +80,29 @@ def summarize_accounts(rows: list[dict], *, now: datetime | None = None) -> list
             "status": status,
         })
     return out
+
+
+# 権限不足を示す Threads/Meta のエラーコード。
+# 10 = permission denied（スコープ不足）／190 = トークン失効。
+_PERMISSION_CODES = {10, 190}
+
+
+def classify_read_result(*, error, status, body) -> str:
+    """投稿一覧の取得結果を人間向けの一文にする（純関数）。
+
+    ★通信エラーと権限不足を混ぜない。
+    2026-09-11、一時的な read timeout を「収集用の権限が不足」と表示してしまい、
+    問題のない本番アカウントについて誤警告を出した。誤警告は不要なトークン取り直しを
+    招くため、「確認できなかった」と「権限が足りない」を必ず言い分ける。
+    """
+    if error is not None:
+        return f"確認できず（通信エラー: {type(error).__name__}・時間をおいて再実行してください）"
+    body = body or {}
+    if "data" in body:
+        return "投稿一覧の取得OK"
+    err = body.get("error") or {}
+    msg = str(err.get("message") or "")[:100]
+    code = err.get("code")
+    if code in _PERMISSION_CODES or "permission" in msg.lower():
+        return f"**収集用の権限が不足**（code={code} {msg}）"
+    return f"取得できず（status={status} {msg}）"

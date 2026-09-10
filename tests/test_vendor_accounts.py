@@ -671,3 +671,45 @@ def test_shows_role_so_outsourced_is_visible():
     assert out[0]["is_outsourced"] is False
     assert out[1]["is_outsourced"] is True
     print("  ✓ 運用種別を表示 OK")
+
+
+# ---------------------------------------------------------------------------
+# トークン診断: 通信エラーを「権限不足」と誤診しない
+#
+# 2026-09-11、check_accounts.py --verify が本番の主力アカ takumi_kojo_navi について
+# 「収集用の権限が不足」と表示した。実際は権限に問題はなく、graph.threads.net の
+# 一時的な read timeout を例外で拾って権限不足と同じ扱いにしていただけだった。
+# 誤警告は「本物の権限不足」を疑わせて無駄なトークン取り直しを招くので、原因を分けて出す。
+# ---------------------------------------------------------------------------
+from threads_poster.accounts_status import classify_read_result  # noqa: E402
+
+
+def test_network_error_is_not_reported_as_permission_problem():
+    """通信エラーは『確認できず』。権限の話にしない。"""
+    msg = classify_read_result(error=TimeoutError("read timed out"), status=None, body=None)
+    assert "確認できず" in msg
+    assert "権限" not in msg, f"通信エラーを権限問題として報告している: {msg}"
+    print("  ✓ 通信エラーを権限不足と誤診しない OK")
+
+
+def test_missing_permission_is_reported_as_such():
+    """APIが権限エラーを返したときだけ権限の話をする。"""
+    body = {"error": {"message": "Insufficient permission", "code": 10}}
+    msg = classify_read_result(error=None, status=403, body=body)
+    assert "権限" in msg
+    print("  ✓ 実際の権限エラーは権限として報告 OK")
+
+
+def test_success_is_reported_as_ok():
+    """投稿一覧が返れば成功。"""
+    msg = classify_read_result(error=None, status=200, body={"data": [{"id": "1"}]})
+    assert "OK" in msg
+    print("  ✓ 成功を正しく判定 OK")
+
+
+def test_other_api_error_shows_the_message():
+    """権限以外のAPIエラーは、原因が分かるようメッセージをそのまま見せる。"""
+    body = {"error": {"message": "API access blocked", "code": 200}}
+    msg = classify_read_result(error=None, status=400, body=body)
+    assert "API access blocked" in msg
+    print("  ✓ その他のAPIエラーは本文を表示 OK")
