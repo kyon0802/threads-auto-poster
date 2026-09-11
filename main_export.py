@@ -19,7 +19,9 @@
 
 環境変数:
   GOOGLE_SERVICE_ACCOUNT_JSON / BUSINESSES または SPREADSHEET_ID（投稿系と共通ルーティング）
-  EXPORT_SHEET_ID … 書き出し先シートID（必須）
+  EXPORT_SHEET_ID     … 書き出し先シートID（必須）
+  EXPORT_EXTRA_SHEETS … 閲覧用にだけ含める読み取り専用シート（任意・BUSINESSES と同じJSON形式）。
+                        廃止アカウントの過去データを記録として残すために使う
   DRY_RUN         … "1" で書き込まず件数だけ出す
 """
 import json
@@ -64,6 +66,33 @@ README = [
     ["", ""],
     ["このタブは毎回作り直されます", "書き込んでも次の更新で消えます"],
 ]
+
+
+def resolve_export_sheets(env) -> list[tuple[str, str]]:
+    """書き出し対象の (事業名, シートID) を返す。
+
+    通常の事業シート（BUSINESSES / SPREADSHEET_ID）に加えて、
+    **閲覧用シートにだけ含めたい読み取り専用シート**を `EXPORT_EXTRA_SHEETS` で足せる。
+
+    なぜ分けるか: 廃止したアカウントのシートを BUSINESSES に入れると
+    post/weekly/monitor まで動き出してしまう。過去データは記録として残したいので、
+    エクスポートだけが見る経路を用意する。指定が壊れていても通常分の書き出しは止めない。
+    """
+    sheets = list(resolve_business_sheets(env))
+    raw = (env.get("EXPORT_EXTRA_SHEETS") or "").strip()
+    if raw:
+        try:
+            for b in json.loads(raw):
+                sid = b.get("spreadsheet_id") or b.get("id")
+                if sid:
+                    sheets.append((b.get("name", "(extra)"), sid))
+        except Exception as e:  # noqa: BLE001 追加分の失敗で本体を止めない
+            log.warning("EXPORT_EXTRA_SHEETS を読めませんでした（無視して継続）: %s", e)
+    seen, out = set(), []
+    for name, sid in sheets:      # 同じシートを二重に読むと投稿が二重に出る
+        if sid not in seen:
+            seen.add(sid); out.append((name, sid))
+    return out
 
 
 def collect_all(sheets, sa_info) -> tuple[dict, int]:
@@ -156,7 +185,7 @@ def main() -> int:
     sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
     sheet_id = os.environ.get("EXPORT_SHEET_ID")
     dry_run = os.environ.get("DRY_RUN") == "1"
-    sheets = resolve_business_sheets(os.environ)
+    sheets = resolve_export_sheets(os.environ)
     if not sa_json or not sheets:
         log.error("GOOGLE_SERVICE_ACCOUNT_JSON と (BUSINESSES または SPREADSHEET_ID) が必要です")
         return 1

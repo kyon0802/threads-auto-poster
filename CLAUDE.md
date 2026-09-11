@@ -107,7 +107,7 @@ python3 scripts/check_accounts.py --sheet-id <ID> --verify   # 登録状況と�
 - **メール**: `ENABLE_EMAIL=1` でアカウントごとに週次レポートを個別送信（宛先は Variable `MAIL_TO` / `MAIL_TO_<事業名>`・認証は Gmail アプリパスワード。実アドレスは公開repoに書かない＝§17b）。run失敗時はGitHub純正の失敗通知メールも飛ぶ。
 - **データ蓄積**: インサイト/投稿/アカウント指標/週次レポートは全て**追記・upsert**で、過去データは消えない（2026-09-07実測: takumi インサイト7,958行・161投稿・6月分も健在）。`.clear()` するのは `インサイト分析_<acc>`（派生集計）と `殿堂入り_<acc>`（再計算可能）のみ。
 - **在庫監視**: `monitor.yml`（日次 08:00 JST・読取専用）が各アカの未来在庫と残り日数を算出し、在庫ゼロ/残りわずかのときだけ【要確認】メールを送る。在庫ゼロの間は run を exit 2 で赤くする。**投稿ジョブは在庫ゼロでも成功で終わるため、停止を検知できる唯一の仕組み**（§10・docs/CHANGELOG.md §27）。
-- **テスト**: `python3 -m pytest tests/ -q`（192本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。
+- **テスト**: `python3 -m pytest tests/ -q`（196本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。
 - **過去インシデントの教訓は §10 と docs/CHANGELOG.md（§13/§14/§16/§27）**。特に「row_id 必須・全タブ一意」は絶対。
 
 ---
@@ -185,7 +185,7 @@ scripts/                      ローカルで人が実行するセットアッ�
   add_vendor_columns.py       外注対応: accounts に「運用種別」・インサイトに「本文」を追加（冪等・DRY-RUN既定）
   check_accounts.py           登録済みアカウントとトークンの生死を確認（読取専用・トークン値は出さない）
   local_run.sh                .env読込→DRY_RUN既定でローカル実行
-tests/                        テスト（API不要・モック・192本）。pytest でも直実行でも可
+tests/                        テスト（API不要・モック・196本）。pytest でも直実行でも可
   test_logic.py / test_collect.py / test_phase2.py / test_schedule.py
   test_report_window.py（期間窓・在庫・エラー分類） / test_monitor.py / test_threads_api_masking.py
   test_vendor_accounts.py（外注アカ: 投稿しない/生成しない/在庫監視しない/収集はする）
@@ -269,6 +269,7 @@ requirements.txt / .env.example / README.md / SETUP.md
 | `MAIL_TO_<NAME>` | Variable | **事業別の宛先**（カンマ区切りで複数可）。空なら `MAIL_TO` |
 | `RUNWAY_WARN_DAYS` | Variable | 在庫の残り日数がこれ以下で警告（既定2・monitor.yml） |
 | `EXPORT_SHEET_ID` | Secret | 全投稿の書き出し先シートID（export.yml）。**人が作ってサービスアカウントに編集権限で共有**する（SAはDrive容量を持てずファイルを新規作成できない） |
+| `EXPORT_EXTRA_SHEETS` | Secret | 閲覧用シートにだけ含める読み取り専用シート（任意・`BUSINESSES` と同じJSON）。**廃止アカウントの過去データを記録として残す**ため。ここに入れても投稿・生成・在庫監視の対象にはならない |
 | `TZ_NAME` | env | 既定 Asia/Tokyo |
 | `DRY_RUN` | env(ローカル) | "1" で無書込実行（検証用） |
 | `THREADS_CLIENT_SECRET` | env(ローカル) | bootstrap_token.py 実行時のみ |
