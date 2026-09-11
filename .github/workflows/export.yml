@@ -37,5 +37,7 @@ jobs:
           BUSINESSES: ${{ secrets.BUSINESSES }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           EXPORT_SHEET_ID: ${{ secrets.EXPORT_SHEET_ID }}
+          # 廃止アカウントなど、閲覧用シートにだけ含めたい読み取り専用シート（任意）
+          EXPORT_EXTRA_SHEETS: ${{ secrets.EXPORT_EXTRA_SHEETS }}
           TZ_NAME: Asia/Tokyo
         run: python main_export.py

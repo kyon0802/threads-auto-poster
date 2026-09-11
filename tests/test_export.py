@@ -83,3 +83,44 @@ def test_monthly_summary_splits_by_month():
     s = monthly_summary(rows)
     assert [x["month"] for x in s] == ["2026-08", "2026-09"]
     print("  ✓ 月別に分割 OK")
+
+
+# ---------------------------------------------------------------------------
+# 閲覧用シートにだけ含める「読み取り専用の追加シート」
+#
+# 廃止したアカウント（例: 2026-07-28 廃止の占い「結」）は BUSINESSES に入れられない。
+# 入れると post/weekly/monitor まで動き出してしまうため。しかし過去データは記録として
+# 残したいので、**エクスポートだけが見る追加シート**を別の環境変数で渡せるようにする。
+# ---------------------------------------------------------------------------
+from main_export import resolve_export_sheets  # noqa: E402
+
+
+def test_includes_extra_sheets_for_export_only():
+    """EXPORT_EXTRA_SHEETS のシートを、通常の事業シートに足して返す。"""
+    env = {"BUSINESSES": '[{"name":"biz1","spreadsheet_id":"S1"}]',
+           "EXPORT_EXTRA_SHEETS": '[{"name":"retired","spreadsheet_id":"S2"}]'}
+    assert resolve_export_sheets(env) == [("biz1", "S1"), ("retired", "S2")]
+    print("  ✓ 追加シートを含めて返す OK")
+
+
+def test_works_without_extra_sheets():
+    """未設定なら通常の事業シートだけ（後方互換）。"""
+    env = {"BUSINESSES": '[{"name":"biz1","spreadsheet_id":"S1"}]'}
+    assert resolve_export_sheets(env) == [("biz1", "S1")]
+    print("  ✓ 未設定なら従来どおり OK")
+
+
+def test_ignores_duplicate_sheet_ids():
+    """同じシートIDを二重に読まない（投稿が二重に出るのを防ぐ）。"""
+    env = {"BUSINESSES": '[{"name":"biz1","spreadsheet_id":"S1"}]',
+           "EXPORT_EXTRA_SHEETS": '[{"name":"dup","spreadsheet_id":"S1"}]'}
+    assert resolve_export_sheets(env) == [("biz1", "S1")]
+    print("  ✓ 重複シートIDを除外 OK")
+
+
+def test_bad_json_does_not_break_export():
+    """追加シートの指定が壊れていても、通常の事業分の書き出しは続ける。"""
+    env = {"BUSINESSES": '[{"name":"biz1","spreadsheet_id":"S1"}]',
+           "EXPORT_EXTRA_SHEETS": "これはJSONではない"}
+    assert resolve_export_sheets(env) == [("biz1", "S1")]
+    print("  ✓ 壊れた指定を無視して継続 OK")
