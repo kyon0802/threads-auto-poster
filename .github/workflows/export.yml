@@ -1,0 +1,41 @@
+name: threads-export-sheet
+
+on:
+  schedule:
+    # 毎日 05:00 JST（= 20:00 UTC）。収集(04:00 JST)の直後に走らせ、
+    # 人が朝に開いたとき前日ぶんまで反映済みの状態にする。
+    - cron: "0 20 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: threads-export # 投稿/収集/週次/監視とは別系統（互いに邪魔しない）
+  cancel-in-progress: false
+
+# 読み取り専用のジョブ。このrepoへは何も書き戻さない。
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      # 全事業シートを読み、1枚の閲覧用シートへ全置換で書き出す。
+      # Threads API も AI も叩かないので、課金も投稿も発生しない。
+      - name: Export all posts to the viewing sheet
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          BUSINESSES: ${{ secrets.BUSINESSES }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          EXPORT_SHEET_ID: ${{ secrets.EXPORT_SHEET_ID }}
+          TZ_NAME: Asia/Tokyo
+        run: python main_export.py
