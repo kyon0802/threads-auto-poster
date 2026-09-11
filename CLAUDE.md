@@ -48,12 +48,13 @@
 ```
 スプレッドシート（事業ごとに1枚・投稿キュー＋アカウント/トークン＋インサイト＋ナレッジ）
         ↑ 読む / 結果(status, posted_id, インサイト, 分析, 生成投稿)を書き戻す
-GitHub Actions（すべて別systemの6本）
+GitHub Actions（すべて別systemの7本）
   post.yml    10分おき  → main.py         投稿の公開（Threads API・**自社4アカのみ**）
                                           ＋全アカのトークン自動リフレッシュ（7日経過で更新）
   collect.yml 日次04:00 → main_collect.py インサイト収集（読み取り専用・自社4＋外注2の全6アカ）
   weekly.yml  日次06:00 → main_weekly.py  3日サイクルゲート→分析→レポート→生成→メール
   monitor.yml 日次08:00 → main_monitor.py 投稿在庫の監視（読取専用・異常時のみ通知）
+  export.yml  日次05:00 → main_export.py  全投稿を閲覧用シートへ書き出し（読取専用・全置換）
   preflight.yml 手動のみ → main_preflight.py 生成AIの疎通/残高チェック（副作用ゼロ）
   tests.yml   push/PR   → pytest tests/   検証専用（秘密不使用）
 ```
@@ -106,7 +107,7 @@ python3 scripts/check_accounts.py --sheet-id <ID> --verify   # 登録状況と�
 - **メール**: `ENABLE_EMAIL=1` でアカウントごとに週次レポートを個別送信（宛先は Variable `MAIL_TO` / `MAIL_TO_<事業名>`・認証は Gmail アプリパスワード。実アドレスは公開repoに書かない＝§17b）。run失敗時はGitHub純正の失敗通知メールも飛ぶ。
 - **データ蓄積**: インサイト/投稿/アカウント指標/週次レポートは全て**追記・upsert**で、過去データは消えない（2026-09-07実測: takumi インサイト7,958行・161投稿・6月分も健在）。`.clear()` するのは `インサイト分析_<acc>`（派生集計）と `殿堂入り_<acc>`（再計算可能）のみ。
 - **在庫監視**: `monitor.yml`（日次 08:00 JST・読取専用）が各アカの未来在庫と残り日数を算出し、在庫ゼロ/残りわずかのときだけ【要確認】メールを送る。在庫ゼロの間は run を exit 2 で赤くする。**投稿ジョブは在庫ゼロでも成功で終わるため、停止を検知できる唯一の仕組み**（§10・docs/CHANGELOG.md §27）。
-- **テスト**: `python3 -m pytest tests/ -q`（185本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。
+- **テスト**: `python3 -m pytest tests/ -q`（192本・API不要のモック）。push/PR ごとに tests.yml でも自動実行。
 - **過去インシデントの教訓は §10 と docs/CHANGELOG.md（§13/§14/§16/§27）**。特に「row_id 必須・全タブ一意」は絶対。
 
 ---
@@ -137,6 +138,9 @@ main.py                       投稿エントリ（post.yml から10分おき）
 main_collect.py               インサイト収集エントリ（collect.yml から日次・読み取り専用）
 main_weekly.py                週次エントリ（weekly.yml から日次→3日サイクルゲート）
 main_monitor.py               在庫監視エントリ（monitor.yml から日次・読取専用）
+main_export.py                全投稿を1枚の閲覧用シートへ書き出す（export.yml から日次・読取専用）
+                              サービスアカウントは Drive 容量を持てずファイルを作れないため、
+                              シートの器は人が作って共有し、中身はこのジョブが全置換で埋める
 main_preflight.py             生成AIの事前疎通チェック（preflight.yml から手動・副作用ゼロ）
                               max_tokens=1 を1回投げ「残高不足/認証エラー/…」に分類する。
                               本番の週次を撃たずに「今動くか」を確かめる唯一の手段
@@ -153,6 +157,8 @@ threads_poster/
   vendor.py                   外注アカの作業量指標（純関数・AI不使用）。新規本文数/使い回し率/
                               稼働日/時間帯。analyzer.py（自社の勝ちパターン）とは目的が違うので分離
   accounts_status.py          トークンの棚卸し（純関数）。残り日数と、通信エラー/権限不足の言い分け
+  export.py                   閲覧用シートの行整形（純関数）。日次スナップショットを1投稿1行に畳み、
+                              本文が空の古い行を投稿タブから補完する
   errors.py                   失敗理由の分類（残高不足/認証/レート/一時障害・純関数）
   hall_of_fame.py             殿堂入り＝自アカ長期の当たり30本の構築とプロンプト用抽出（純関数）
   reporter.py                 週次レポートのタブ追記＋Markdownミラー（AI不使用）
@@ -179,10 +185,11 @@ scripts/                      ローカルで人が実行するセットアッ�
   add_vendor_columns.py       外注対応: accounts に「運用種別」・インサイトに「本文」を追加（冪等・DRY-RUN既定）
   check_accounts.py           登録済みアカウントとトークンの生死を確認（読取専用・トークン値は出さない）
   local_run.sh                .env読込→DRY_RUN既定でローカル実行
-tests/                        テスト（API不要・モック・185本）。pytest でも直実行でも可
+tests/                        テスト（API不要・モック・192本）。pytest でも直実行でも可
   test_logic.py / test_collect.py / test_phase2.py / test_schedule.py
   test_report_window.py（期間窓・在庫・エラー分類） / test_monitor.py / test_threads_api_masking.py
   test_vendor_accounts.py（外注アカ: 投稿しない/生成しない/在庫監視しない/収集はする）
+  test_export.py（閲覧用シート: 1投稿1行・本文補完・月別サマリは中央値が主）
 sheet_templates/              accounts.csv / posts.csv / posts_example.csv（記入例）
 .claude/agents/               このrepo専用のサブエージェント定義10体（orchestrator が回し役。
                               api-specialist / system-architect / devops / insights-engineer /
@@ -261,6 +268,7 @@ requirements.txt / .env.example / README.md / SETUP.md
 | `ENABLE_EMAIL` / `EMAIL_BUSINESSES` / `MAIL_TO` | Variable | 週次メール配信（EMAIL_BUSINESSES空=全事業） |
 | `MAIL_TO_<NAME>` | Variable | **事業別の宛先**（カンマ区切りで複数可）。空なら `MAIL_TO` |
 | `RUNWAY_WARN_DAYS` | Variable | 在庫の残り日数がこれ以下で警告（既定2・monitor.yml） |
+| `EXPORT_SHEET_ID` | Secret | 全投稿の書き出し先シートID（export.yml）。**人が作ってサービスアカウントに編集権限で共有**する（SAはDrive容量を持てずファイルを新規作成できない） |
 | `TZ_NAME` | env | 既定 Asia/Tokyo |
 | `DRY_RUN` | env(ローカル) | "1" で無書込実行（検証用） |
 | `THREADS_CLIENT_SECRET` | env(ローカル) | bootstrap_token.py 実行時のみ |
